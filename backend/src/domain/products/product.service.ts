@@ -1,11 +1,15 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { Cart } from '../carts/entities/cart.entity';
 import { AddToCartDto } from './dtos/add-to-cart.dto';
 import { CreateProductDto } from './dtos/create-product.dto';
 import { CartProduct } from './entities/cart-product.entity';
 import { Product } from './entities/product.entity';
+import { AddProductToCartDto } from './dtos/add-product-to-cart.dto';
+import * as path from 'path';
+import * as fs from 'fs'
+import { ProductCategory } from 'src/common/enum/product-categories.enum';
 
 @Injectable()
 export class ProductService {
@@ -18,6 +22,7 @@ export class ProductService {
 
     @InjectRepository(CartProduct)
     private readonly cartProductRepo: Repository<CartProduct>,
+    private dataSource : DataSource
   ) {}
 
   // === 1. Thêm sản phẩm mới ===
@@ -75,4 +80,51 @@ export class ProductService {
 
     return rows;
   }
+ async addProductToCart(dto: AddProductToCartDto, file: Express.Multer.File) {
+  return await this.dataSource.transaction(async (manager) => {
+    const { cart_id, name, price, quantity,category } = dto;
+
+    let filePath = '';
+
+    // 🔹 Lưu file
+    if (file) {
+      const uploadDir = path.join(process.cwd(), 'uploads');
+      if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+
+      const fileName = `${Date.now()}-${file.originalname}`;
+      const savePath = path.join(uploadDir, fileName);
+
+      fs.writeFileSync(savePath, file.buffer);
+
+      filePath = `/uploads/${fileName}`;
+    }
+
+    // 🔹 Luôn tạo product mới
+    const product = manager.create(Product, {
+      name,
+      price,
+      img_url: filePath,
+      category:category||ProductCategory.OTHER
+    });
+    await manager.save(product);
+
+    // 🔹 Kiểm tra cart tồn tại
+    const cart = await manager.findOne(Cart, {
+      where: { id: cart_id },
+    });
+
+    if (!cart) throw new NotFoundException('Cart not found');
+
+    // 🔹 Luôn tạo cartProduct mới
+    const cartProduct = manager.create(CartProduct, {
+      cart,
+      product,
+      quantity,
+      price,
+    });
+
+    return await manager.save(cartProduct);
+  });
+}
+
 }

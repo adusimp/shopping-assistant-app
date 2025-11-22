@@ -1,7 +1,17 @@
-import { Controller, Post, Body, Get, Param } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  Get,
+  Param,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
 import { ProductService } from './product.service';
 import { AddToCartDto } from './dtos/add-to-cart.dto';
 import { CreateProductDto } from './dtos/create-product.dto';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { AddProductToCartDto } from './dtos/add-product-to-cart.dto';
 
 @Controller('product')
 export class ProductController {
@@ -22,5 +32,15 @@ export class ProductController {
   @Post('add-to-cart')
   addToCart(@Body() dto: AddToCartDto) {
     return this.productService.addToCart(dto);
+  }
+  @Post('add-product-to-cart')
+  @UseInterceptors(FileInterceptor('file'))
+  addProductToCart(
+    @Body() dto: AddProductToCartDto,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    console.log('Body nhận được:', dto);
+    console.log('File nhận được:', file);
+    return this.productService.addProductToCart(dto, file);
   }
 }

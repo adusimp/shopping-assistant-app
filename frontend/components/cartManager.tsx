@@ -12,8 +12,9 @@ import {
   RefreshControl,
 } from 'react-native';
 
+
 // TODO: Thay đổi IP này thành IP máy tính của bạn
-const API_URL = 'http://172.16.10.141:3000';
+const API_URL = process.env.EXPO_PUBLIC_API_URL;
 
 // Định nghĩa kiểu dữ liệu cho Cart (dựa trên output bạn cung cấp)
 interface Cart {

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { uploadAsync, FileSystemUploadType } from 'expo-file-system/legacy';
 import {
   View,
   Text,
@@ -9,22 +10,22 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  Modal,        // <--- 1. Import Modal
-  ScrollView,   // <--- 2. Import ScrollView để cuộn trong Modal
+  Modal,
+  ScrollView,
+  Platform,
 } from 'react-native';
 import { useLocalSearchParams, Stack } from 'expo-router';
+import * as ImagePicker from 'expo-image-picker'; // 1. Import thư viện này
 
 // TODO: Thay đổi IP này thành IP máy tính của bạn
-const API_URL = 'http://172.16.10.141:3000';
+const API_URL = process.env.EXPO_PUBLIC_API_URL;
 
-// Interface cho Header (Thông tin Cart)
 interface CartDetail {
   id: number;
   name: string;
   notify_at: string | null;
 }
 
-// Interface Item
 interface CartItem {
   product_id: number;
   name: string;
@@ -37,22 +38,20 @@ export default function ListDetailScreen() {
   const { id } = useLocalSearchParams();
   const cartId = Array.isArray(id) ? id[0] : id;
 
-  // --- State Header & List ---
+  // --- State ---
   const [cart, setCart] = useState<CartDetail | null>(null);
   const [items, setItems] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
-  
-  // State Edit Header
+
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState('');
   const [editNotify, setEditNotify] = useState('');
 
-  // --- 3. STATE CHO MODAL & FORM THÊM MỚI ---
   const [modalVisible, setModalVisible] = useState(false);
-  
-  // Các trường dữ liệu nhập liệu
+
+  // Form fields
   const [newName, setNewName] = useState('');
-  const [newImage, setNewImage] = useState('');
+  const [newImage, setNewImage] = useState(''); // Biến này giờ sẽ chứa URI ảnh local
   const [newPrice, setNewPrice] = useState('');
   const [newCategory, setNewCategory] = useState('');
   const [newQuantity, setNewQuantity] = useState('1');
@@ -87,7 +86,20 @@ export default function ListDetailScreen() {
     }
   };
 
-  // Update Cart Info
+  // --- 2. Hàm chọn ảnh từ thư viện ---
+  const pickImage = async () => {
+    let result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 1,
+    });
+
+    if (!result.canceled) {
+      setNewImage(result.assets[0].uri);
+    }
+  };
+
   const handleUpdateCart = async () => {
     try {
       const res = await fetch(`${API_URL}/cart/${cartId}`, {
@@ -103,59 +115,122 @@ export default function ListDetailScreen() {
     } catch (error) { console.error(error); }
   };
 
-  // --- 4. HÀM THÊM SẢN PHẨM (NÂNG CẤP) ---
-  const handleAddItem = async () => {
-    // Validate đơn giản
-    if (!newName.trim()) {
-      Alert.alert("Thiếu thông tin", "Vui lòng nhập tên sản phẩm");
-      return;
-    }
+ const handleAddItem = async () => {
+  if (!newName.trim()) {
+    Alert.alert("Thiếu thông tin", "Vui lòng nhập tên sản phẩm");
+    return;
+  }
 
-    try {
-      // Tạo payload đầy đủ thông tin
-      const payload = {
-        cart_id: parseInt(cartId as string),
-        name: newName,
-        img_url: newImage,
-        price: parseFloat(newPrice) || 0,
-        category: newCategory,
-        quantity: parseInt(newQuantity) || 1
-      };
+  try {
+    // --- TRƯỜNG HỢP 1: WEB (Giữ nguyên) ---
+    if (Platform.OS === 'web') {
+      const formData = new FormData();
+      formData.append('cart_id', String(cartId));
+      formData.append('name', newName);
+      formData.append('price', String(newPrice || 0));
+      formData.append('quantity', String(newQuantity || 1));
+      formData.append('category', newCategory || '');
 
-      const res = await fetch(`${API_URL}/cart-items`, {
+      if (newImage) {
+        const response = await fetch(newImage);
+        const blob = await response.blob();
+        formData.append('file', blob, 'upload.jpg');
+      }
+
+      const res = await fetch(`${API_URL}/product/add-product-to-cart`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: formData,
       });
 
       if (res.ok) {
-        Alert.alert("Thành công", "Đã thêm sản phẩm!");
-        // Reset form và đóng modal
-        setNewName('');
-        setNewImage('');
-        setNewPrice('');
-        setNewCategory('');
-        setNewQuantity('1');
-        setModalVisible(false);
-        
-        // Load lại danh sách
-        fetchCartItems();
+        Alert.alert("Thành công", "Đã thêm trên Web!");
+        resetForm();
       } else {
-        Alert.alert('Lỗi', 'Không thể thêm sản phẩm (Server error)');
+        const txt = await res.text();
+        Alert.alert("Lỗi Web", txt);
       }
-    } catch (error) { console.error(error); }
+    
+    } else {
+      // --- TRƯỜNG HỢP 2: MOBILE (Android/iOS) ---
+      // Code này dùng thư viện 'legacy' mới import
+      
+      const textFields = {
+        cart_id: String(cartId),
+        name: newName,
+        price: String(newPrice || 0),
+        quantity: String(newQuantity || 1),
+        category: newCategory || '',
+      };
+
+      if (!newImage) {
+          Alert.alert("Lỗi", "Vui lòng chọn ảnh");
+          return;
+      }
+
+      console.log("Mobile: Đang upload legacy...");
+
+      // SỬA Ở ĐÂY: Gọi trực tiếp uploadAsync (không có FileSystem. ở trước)
+      const uploadResult = await uploadAsync(
+        `${API_URL}/product/add-product-to-cart`,
+        newImage,
+        {
+          fieldName: 'file',
+          httpMethod: 'POST',
+          // SỬA Ở ĐÂY: Dùng enum import từ legacy hoặc số 1 đều được
+          uploadType: FileSystemUploadType.MULTIPART, 
+          parameters: textFields,
+        }
+      );
+
+      if (uploadResult.status >= 200 && uploadResult.status < 300) {
+        Alert.alert("Thành công", "Đã thêm trên Mobile!");
+        resetForm();
+      } else {
+        Alert.alert("Lỗi Mobile", "Server trả về: " + uploadResult.body);
+      }
+    }
+
+  } catch (error) {
+    console.error("Lỗi chung:", error);
+    Alert.alert("Lỗi", "Có lỗi xảy ra: " + error);
+  }
+};
+
+  // Hàm reset form tách ra cho gọn
+  const resetForm = () => {
+    setModalVisible(false);
+    setNewName(''); setNewImage(''); setNewPrice(''); setNewQuantity('1');
+    fetchCartItems();
   };
 
   const formatCurrency = (price: string) => {
     const numberPrice = parseFloat(price);
     return numberPrice.toLocaleString('vi-VN', { style: 'currency', currency: 'VND' });
   };
+  const getFullImageUrl = (imagePath: string | null) => {
+    if (!imagePath) return 'https://via.placeholder.com/150'; // Ảnh mặc định nếu null
 
-  // Render Item
+    // Nếu ảnh là link online (https://...) thì giữ nguyên
+    if (imagePath.startsWith('http')) {
+      return imagePath;
+    }
+
+    // Nếu là đường dẫn tương đối từ server (/uploads/...)
+    // Ta nối API_URL vào trước. 
+    // Lưu ý: DB bạn lưu là "/uploads/..." (có dấu / đầu) nên ghép cẩn thận kẻo dư 2 dấu //
+
+    // Cách nối an toàn:
+    // Loại bỏ dấu / ở cuối API_URL nếu có
+    const baseUrl = API_URL?.replace(/\/$/, '');
+    // Đảm bảo imagePath bắt đầu bằng /
+    const path = imagePath.startsWith('/') ? imagePath : `/${imagePath}`;
+
+    return `${baseUrl}${path}`;
+  };
   const renderCartItem = ({ item }: { item: CartItem }) => (
     <View style={styles.itemRow}>
       <Image
-        source={{ uri: item.img_url || 'https://via.placeholder.com/50' }}
+        source={{ uri: getFullImageUrl(item.img_url) || 'https://via.placeholder.com/50' }}
         style={styles.itemImage}
         resizeMode="cover"
       />
@@ -171,9 +246,18 @@ export default function ListDetailScreen() {
 
   return (
     <View style={styles.container}>
-      <Stack.Screen options={{ title: cart?.name || 'Chi tiết' }} />
 
-      {/* Header Info */}
+      <Stack.Screen
+        options={{
+          title: cart?.name || 'Chi tiết',
+          headerRight: () => (
+            <TouchableOpacity onPress={() => setModalVisible(true)} style={{ padding: 5 }}>
+              <Text style={{ fontSize: 30, color: '#007AFF', fontWeight: '300', marginBottom: 4 }}>+</Text>
+            </TouchableOpacity>
+          ),
+        }}
+      />
+
       <View style={styles.headerSection}>
         <View style={styles.headerRow}>
           <Text style={styles.sectionTitle}>Thông Tin Cart</Text>
@@ -181,6 +265,7 @@ export default function ListDetailScreen() {
             <Text style={styles.editBtn}>{isEditing ? 'Lưu' : 'Sửa'}</Text>
           </TouchableOpacity>
         </View>
+
         {isEditing ? (
           <View>
             <TextInput style={styles.input} value={editName} onChangeText={setEditName} />
@@ -195,23 +280,15 @@ export default function ListDetailScreen() {
         )}
       </View>
 
-      {/* Danh sách sản phẩm */}
       <FlatList
         data={items}
         keyExtractor={(item) => item.product_id.toString()}
         renderItem={renderCartItem}
-        contentContainerStyle={{ paddingBottom: 100 }} // Chừa chỗ cho nút thêm mới
+        contentContainerStyle={{ paddingBottom: 40 }}
         ListEmptyComponent={<Text style={styles.emptyText}>Giỏ hàng trống</Text>}
       />
 
-      {/* --- 5. NÚT MỞ MODAL (Ở DƯỚI CÙNG) --- */}
-      <View style={styles.bottomContainer}>
-        <TouchableOpacity style={styles.openModalBtn} onPress={() => setModalVisible(true)}>
-          <Text style={styles.openModalText}>+ Thêm sản phẩm mới</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* --- 6. MODAL FORM NHẬP LIỆU --- */}
+      {/* --- MODAL FORM ĐÃ SỬA --- */}
       <Modal
         animationType="slide"
         transparent={true}
@@ -221,34 +298,36 @@ export default function ListDetailScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Thêm Sản Phẩm</Text>
-            
-            <ScrollView>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
               <Text style={styles.label}>Tên sản phẩm (*):</Text>
               <TextInput style={styles.modalInput} value={newName} onChangeText={setNewName} placeholder="VD: Bánh kẹo..." />
 
-              <Text style={styles.label}>Link ảnh (URL):</Text>
-              <TextInput style={styles.modalInput} value={newImage} onChangeText={setNewImage} placeholder="https://..." />
+              {/* 3. Giao diện chọn ảnh thay vì nhập link */}
+              <Text style={styles.label}>Ảnh sản phẩm:</Text>
+              <View style={{ alignItems: 'center', marginBottom: 15 }}>
+                <TouchableOpacity onPress={pickImage} style={styles.imagePickerBtn}>
+                  {newImage ? (
+                    <Image source={{ uri: newImage }} style={styles.imagePreview} />
+                  ) : (
+                    <Text style={{ color: '#666' }}>+ Chọn ảnh từ thư viện</Text>
+                  )}
+                </TouchableOpacity>
+                {newImage ? (
+                  <TouchableOpacity onPress={() => setNewImage('')}>
+                    <Text style={{ color: 'red', marginTop: 5, fontSize: 12 }}>Xóa ảnh</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
 
-              <View style={{flexDirection: 'row', justifyContent: 'space-between'}}>
-                <View style={{width: '48%'}}>
-                    <Text style={styles.label}>Giá (VNĐ):</Text>
-                    <TextInput 
-                        style={styles.modalInput} 
-                        value={newPrice} 
-                        onChangeText={setNewPrice} 
-                        keyboardType="numeric" 
-                        placeholder="0" 
-                    />
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <View style={{ width: '48%' }}>
+                  <Text style={styles.label}>Giá (VNĐ):</Text>
+                  <TextInput style={styles.modalInput} value={newPrice} onChangeText={setNewPrice} keyboardType="numeric" placeholder="0" />
                 </View>
-                <View style={{width: '48%'}}>
-                    <Text style={styles.label}>Số lượng:</Text>
-                    <TextInput 
-                        style={styles.modalInput} 
-                        value={newQuantity} 
-                        onChangeText={setNewQuantity} 
-                        keyboardType="numeric" 
-                        placeholder="1" 
-                    />
+                <View style={{ width: '48%' }}>
+                  <Text style={styles.label}>Số lượng:</Text>
+                  <TextInput style={styles.modalInput} value={newQuantity} onChangeText={setNewQuantity} keyboardType="numeric" placeholder="1" />
                 </View>
               </View>
 
@@ -261,7 +340,7 @@ export default function ListDetailScreen() {
                 <Text style={styles.btnText}>Hủy</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.btn, styles.btnSave]} onPress={handleAddItem}>
-                <Text style={[styles.btnText, {color: 'white'}]}>Lưu</Text>
+                <Text style={[styles.btnText, { color: 'white' }]}>Lưu</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -277,16 +356,15 @@ const styles = StyleSheet.create({
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
   headerSection: { backgroundColor: '#fff', padding: 15, marginBottom: 10 },
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+
   sectionTitle: { fontSize: 16, fontWeight: 'bold', color: '#333' },
   editBtn: { color: '#007AFF', fontSize: 16 },
   infoText: { fontSize: 15, marginBottom: 4, color: '#444' },
-  
-  // Input trong Header (Sửa Cart)
+
   input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 6, padding: 8, marginBottom: 8, backgroundColor: '#fff' },
   cancelText: { color: 'red', textAlign: 'right' },
 
-  // List Item Styles
   itemRow: {
     backgroundColor: '#fff',
     padding: 12,
@@ -304,16 +382,7 @@ const styles = StyleSheet.create({
   itemPrice: { fontSize: 15, fontWeight: 'bold', color: '#FF3B30' },
   emptyText: { textAlign: 'center', marginTop: 20, color: '#999' },
 
-  // --- Styles cho Nút mở Modal & Modal ---
-  bottomContainer: {
-    position: 'absolute', bottom: 20, left: 0, right: 0, paddingHorizontal: 20
-  },
-  openModalBtn: {
-    backgroundColor: '#007AFF', padding: 15, borderRadius: 12, alignItems: 'center',
-    shadowColor: "#000", shadowOffset: {width: 0, height: 2}, shadowOpacity: 0.3, shadowRadius: 3.84, elevation: 5,
-  },
-  openModalText: { color: 'white', fontSize: 16, fontWeight: 'bold' },
-
+  // Modal Styles
   modalOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20
   },
@@ -322,14 +391,31 @@ const styles = StyleSheet.create({
     shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 5
   },
   modalTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' },
-  
-  // Input trong Modal
   label: { fontSize: 14, fontWeight: '600', marginBottom: 5, color: '#333', marginTop: 10 },
   modalInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 10, fontSize: 16, backgroundColor: '#f9f9f9' },
-  
   modalButtons: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 25 },
   btn: { flex: 1, padding: 12, borderRadius: 8, alignItems: 'center' },
   btnCancel: { backgroundColor: '#eee', marginRight: 10 },
   btnSave: { backgroundColor: '#34C759' },
-  btnText: { fontSize: 16, fontWeight: '600' }
+  btnText: { fontSize: 16, fontWeight: '600' },
+
+  // 4. Thêm Style mới cho nút chọn ảnh
+  imagePickerBtn: {
+    width: '100%',
+    height: 150,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderStyle: 'dashed',
+    marginTop: 5,
+  },
+  imagePreview: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 8,
+    resizeMode: 'cover',
+  },
 });
