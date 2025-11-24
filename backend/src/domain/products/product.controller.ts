@@ -6,12 +6,14 @@ import {
   Param,
   UploadedFile,
   UseInterceptors,
+  Query,
 } from '@nestjs/common';
 import { ProductService } from './product.service';
 import { AddToCartDto } from './dtos/add-to-cart.dto';
 import { CreateProductDto } from './dtos/create-product.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AddProductToCartDto } from './dtos/add-product-to-cart.dto';
+import { ProductCategory } from 'src/common/enum/product-categories.enum';
 
 @Controller('product')
 export class ProductController {
@@ -42,5 +44,14 @@ export class ProductController {
     console.log('Body nhận được:', dto);
     console.log('File nhận được:', file);
     return this.productService.addProductToCart(dto, file);
+  }
+  @Get()
+  async getAllProducts(
+    @Query('page') page: string,
+    @Query('category') category?: ProductCategory,
+  ) {
+    const pageNum = page ? parseInt(page, 10) : 1;
+
+    return this.productService.getAllProducts(pageNum, category);
   }
 }

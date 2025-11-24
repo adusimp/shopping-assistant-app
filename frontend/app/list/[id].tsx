@@ -13,9 +13,13 @@ import {
   Modal,
   ScrollView,
   Platform,
+  KeyboardAvoidingView, // Thêm cái này cho form nhập liệu ko bị che
 } from 'react-native';
 import { useLocalSearchParams, Stack } from 'expo-router';
-import * as ImagePicker from 'expo-image-picker'; // 1. Import thư viện này
+import * as ImagePicker from 'expo-image-picker';
+import ProductListScreen from '@/components/productListScreen';
+import { Ionicons } from '@expo/vector-icons'; // Import Icon
+import { getFullImageUrl } from '@/common/function/getImageUrl';
 
 // TODO: Thay đổi IP này thành IP máy tính của bạn
 const API_URL = process.env.EXPO_PUBLIC_API_URL;
@@ -38,7 +42,7 @@ export default function ListDetailScreen() {
   const { id } = useLocalSearchParams();
   const cartId = Array.isArray(id) ? id[0] : id;
 
-  // --- State ---
+  // --- State Data ---
   const [cart, setCart] = useState<CartDetail | null>(null);
   const [items, setItems] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,11 +51,13 @@ export default function ListDetailScreen() {
   const [editName, setEditName] = useState('');
   const [editNotify, setEditNotify] = useState('');
 
-  const [modalVisible, setModalVisible] = useState(false);
+  // --- State Modal (Đã tách ra làm 2) ---
+  const [modalManualVisible, setModalManualVisible] = useState(false); // Modal nhập tay
+  const [modalListVisible, setModalListVisible] = useState(false);     // Modal chọn từ kho
 
-  // Form fields
+  // Form fields (Cho nhập tay)
   const [newName, setNewName] = useState('');
-  const [newImage, setNewImage] = useState(''); // Biến này giờ sẽ chứa URI ảnh local
+  const [newImage, setNewImage] = useState('');
   const [newPrice, setNewPrice] = useState('');
   const [newCategory, setNewCategory] = useState('');
   const [newQuantity, setNewQuantity] = useState('1');
@@ -115,90 +121,87 @@ export default function ListDetailScreen() {
     } catch (error) { console.error(error); }
   };
 
- const handleAddItem = async () => {
-  if (!newName.trim()) {
-    Alert.alert("Thiếu thông tin", "Vui lòng nhập tên sản phẩm");
-    return;
-  }
-
-  try {
-    // --- TRƯỜNG HỢP 1: WEB (Giữ nguyên) ---
-    if (Platform.OS === 'web') {
-      const formData = new FormData();
-      formData.append('cart_id', String(cartId));
-      formData.append('name', newName);
-      formData.append('price', String(newPrice || 0));
-      formData.append('quantity', String(newQuantity || 1));
-      formData.append('category', newCategory || '');
-
-      if (newImage) {
-        const response = await fetch(newImage);
-        const blob = await response.blob();
-        formData.append('file', blob, 'upload.jpg');
-      }
-
-      const res = await fetch(`${API_URL}/product/add-product-to-cart`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (res.ok) {
-        Alert.alert("Thành công", "Đã thêm trên Web!");
-        resetForm();
-      } else {
-        const txt = await res.text();
-        Alert.alert("Lỗi Web", txt);
-      }
-    
-    } else {
-      // --- TRƯỜNG HỢP 2: MOBILE (Android/iOS) ---
-      // Code này dùng thư viện 'legacy' mới import
-      
-      const textFields = {
-        cart_id: String(cartId),
-        name: newName,
-        price: String(newPrice || 0),
-        quantity: String(newQuantity || 1),
-        category: newCategory || '',
-      };
-
-      if (!newImage) {
-          Alert.alert("Lỗi", "Vui lòng chọn ảnh");
-          return;
-      }
-
-      console.log("Mobile: Đang upload legacy...");
-
-      // SỬA Ở ĐÂY: Gọi trực tiếp uploadAsync (không có FileSystem. ở trước)
-      const uploadResult = await uploadAsync(
-        `${API_URL}/product/add-product-to-cart`,
-        newImage,
-        {
-          fieldName: 'file',
-          httpMethod: 'POST',
-          // SỬA Ở ĐÂY: Dùng enum import từ legacy hoặc số 1 đều được
-          uploadType: FileSystemUploadType.MULTIPART, 
-          parameters: textFields,
-        }
-      );
-
-      if (uploadResult.status >= 200 && uploadResult.status < 300) {
-        Alert.alert("Thành công", "Đã thêm trên Mobile!");
-        resetForm();
-      } else {
-        Alert.alert("Lỗi Mobile", "Server trả về: " + uploadResult.body);
-      }
+  // --- Xử lý thêm thủ công ---
+  const handleAddItem = async () => {
+    if (!newName.trim()) {
+      Alert.alert("Thiếu thông tin", "Vui lòng nhập tên sản phẩm");
+      return;
     }
 
-  } catch (error) {
-    console.error("Lỗi chung:", error);
-    Alert.alert("Lỗi", "Có lỗi xảy ra: " + error);
-  }
-};
+    try {
+      // --- TRƯỜNG HỢP 1: WEB ---
+      if (Platform.OS === 'web') {
+        const formData = new FormData();
+        formData.append('cart_id', String(cartId));
+        formData.append('name', newName);
+        formData.append('price', String(newPrice || 0));
+        formData.append('quantity', String(newQuantity || 1));
+        formData.append('category', newCategory || '');
 
-  // Hàm reset form tách ra cho gọn
+        if (newImage) {
+          const response = await fetch(newImage);
+          const blob = await response.blob();
+          formData.append('file', blob, 'upload.jpg');
+        }
+
+        const res = await fetch(`${API_URL}/product/add-product-to-cart`, {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (res.ok) {
+          Alert.alert("Thành công", "Đã thêm trên Web!");
+          resetForm();
+        } else {
+          const txt = await res.text();
+          Alert.alert("Lỗi Web", txt);
+        }
+
+      } else {
+        // --- TRƯỜNG HỢP 2: MOBILE (Android/iOS) ---
+        const textFields = {
+          cart_id: String(cartId),
+          name: newName,
+          price: String(newPrice || 0),
+          quantity: String(newQuantity || 1),
+          category: newCategory || '',
+        };
+
+        if (!newImage) {
+          Alert.alert("Lỗi", "Vui lòng chọn ảnh");
+          return;
+        }
+
+        console.log("Mobile: Đang upload legacy...");
+
+        const uploadResult = await uploadAsync(
+          `${API_URL}/product/add-product-to-cart`,
+          newImage,
+          {
+            fieldName: 'file',
+            httpMethod: 'POST',
+            uploadType: FileSystemUploadType.MULTIPART,
+            parameters: textFields,
+          }
+        );
+
+        if (uploadResult.status >= 200 && uploadResult.status < 300) {
+          Alert.alert("Thành công", "Đã thêm trên Mobile!");
+          resetForm();
+        } else {
+          Alert.alert("Lỗi Mobile", "Server trả về: " + uploadResult.body);
+        }
+      }
+
+    } catch (error) {
+      console.error("Lỗi chung:", error);
+      Alert.alert("Lỗi", "Có lỗi xảy ra: " + error);
+    }
+  };
+
+  // Reset form thủ công
   const resetForm = () => {
-    setModalVisible(false);
+    setModalManualVisible(false); // Đóng modal thủ công
     setNewName(''); setNewImage(''); setNewPrice(''); setNewQuantity('1');
     fetchCartItems();
   };
@@ -207,26 +210,17 @@ export default function ListDetailScreen() {
     const numberPrice = parseFloat(price);
     return numberPrice.toLocaleString('vi-VN', { style: 'currency', currency: 'VND' });
   };
-  const getFullImageUrl = (imagePath: string | null) => {
-    if (!imagePath) return 'https://via.placeholder.com/150'; // Ảnh mặc định nếu null
 
-    // Nếu ảnh là link online (https://...) thì giữ nguyên
-    if (imagePath.startsWith('http')) {
-      return imagePath;
-    }
+  // const getFullImageUrl = (imagePath: string | null) => {
+  //   if (!imagePath) return 'https://via.placeholder.com/150';
+  //   if (imagePath.startsWith('http')) {
+  //     return imagePath;
+  //   }
+  //   const baseUrl = API_URL?.replace(/\/$/, '');
+  //   const path = imagePath.startsWith('/') ? imagePath : `/${imagePath}`;
+  //   return `${baseUrl}${path}`;
+  // };
 
-    // Nếu là đường dẫn tương đối từ server (/uploads/...)
-    // Ta nối API_URL vào trước. 
-    // Lưu ý: DB bạn lưu là "/uploads/..." (có dấu / đầu) nên ghép cẩn thận kẻo dư 2 dấu //
-
-    // Cách nối an toàn:
-    // Loại bỏ dấu / ở cuối API_URL nếu có
-    const baseUrl = API_URL?.replace(/\/$/, '');
-    // Đảm bảo imagePath bắt đầu bằng /
-    const path = imagePath.startsWith('/') ? imagePath : `/${imagePath}`;
-
-    return `${baseUrl}${path}`;
-  };
   const renderCartItem = ({ item }: { item: CartItem }) => (
     <View style={styles.itemRow}>
       <Image
@@ -250,10 +244,19 @@ export default function ListDetailScreen() {
       <Stack.Screen
         options={{
           title: cart?.name || 'Chi tiết',
+          // --- HEADER VỚI 2 NÚT ---
           headerRight: () => (
-            <TouchableOpacity onPress={() => setModalVisible(true)} style={{ padding: 5 }}>
-              <Text style={{ fontSize: 30, color: '#007AFF', fontWeight: '300', marginBottom: 4 }}>+</Text>
-            </TouchableOpacity>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 15 }}>
+              {/* Nút 1: Chọn từ kho (Icon Sách) */}
+              <TouchableOpacity onPress={() => setModalListVisible(true)} style={{ padding: 5 }}>
+                <Ionicons name="library-outline" size={26} color="#007AFF" />
+              </TouchableOpacity>
+
+              {/* Nút 2: Thêm thủ công (Icon Cộng tròn) */}
+              <TouchableOpacity onPress={() => setModalManualVisible(true)} style={{ padding: 5 }}>
+                <Ionicons name="add-circle-outline" size={28} color="#007AFF" />
+              </TouchableOpacity>
+            </View>
           ),
         }}
       />
@@ -280,6 +283,8 @@ export default function ListDetailScreen() {
         )}
       </View>
 
+      <Text style={{ marginLeft: 15, fontWeight: '600', color: '#666', marginBottom: 5 }}>Giỏ hàng ({items.length})</Text>
+      
       <FlatList
         data={items}
         keyExtractor={(item) => item.product_id.toString()}
@@ -288,22 +293,49 @@ export default function ListDetailScreen() {
         ListEmptyComponent={<Text style={styles.emptyText}>Giỏ hàng trống</Text>}
       />
 
-      {/* --- MODAL FORM ĐÃ SỬA --- */}
+      {/* --- MODAL 1: CHỌN TỪ KHO (Full Screen) --- */}
+      <Modal
+        animationType="slide"
+        transparent={false} // Full màn hình
+        visible={modalListVisible}
+        onRequestClose={() => setModalListVisible(false)}
+      >
+         <View style={{flex: 1, backgroundColor: '#f5f5f5'}}>
+             {/* Header của Modal List */}
+             <View style={styles.modalListHeader}>
+                 <TouchableOpacity onPress={() => setModalListVisible(false)}>
+                     <Text style={{color: '#007AFF', fontSize: 16}}>Đóng</Text>
+                 </TouchableOpacity>
+                 <Text style={{fontSize: 17, fontWeight: 'bold'}}>Kho sản phẩm</Text>
+                 <View style={{width: 40}} /> 
+             </View>
+             
+             {/* Component Danh sách sản phẩm */}
+             <ProductListScreen 
+                 cartId={Number(cartId)} 
+                 onItemAdded={() => fetchCartItems()} // Reload cart khi thêm xong
+             />
+         </View>
+      </Modal>
+
+      {/* --- MODAL 2: THÊM THỦ CÔNG (Popup) --- */}
       <Modal
         animationType="slide"
         transparent={true}
-        visible={modalVisible}
-        onRequestClose={() => setModalVisible(false)}
+        visible={modalManualVisible} // Đã đổi tên state
+        onRequestClose={() => setModalManualVisible(false)}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.modalOverlay}
+        >
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Thêm Sản Phẩm</Text>
+            <Text style={styles.modalTitle}>Thêm thủ công</Text>
 
             <ScrollView showsVerticalScrollIndicator={false}>
               <Text style={styles.label}>Tên sản phẩm (*):</Text>
               <TextInput style={styles.modalInput} value={newName} onChangeText={setNewName} placeholder="VD: Bánh kẹo..." />
 
-              {/* 3. Giao diện chọn ảnh thay vì nhập link */}
               <Text style={styles.label}>Ảnh sản phẩm:</Text>
               <View style={{ alignItems: 'center', marginBottom: 15 }}>
                 <TouchableOpacity onPress={pickImage} style={styles.imagePickerBtn}>
@@ -336,7 +368,7 @@ export default function ListDetailScreen() {
             </ScrollView>
 
             <View style={styles.modalButtons}>
-              <TouchableOpacity style={[styles.btn, styles.btnCancel]} onPress={() => setModalVisible(false)}>
+              <TouchableOpacity style={[styles.btn, styles.btnCancel]} onPress={() => setModalManualVisible(false)}>
                 <Text style={styles.btnText}>Hủy</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.btn, styles.btnSave]} onPress={handleAddItem}>
@@ -344,7 +376,7 @@ export default function ListDetailScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
     </View>
@@ -382,7 +414,20 @@ const styles = StyleSheet.create({
   itemPrice: { fontSize: 15, fontWeight: 'bold', color: '#FF3B30' },
   emptyText: { textAlign: 'center', marginTop: 20, color: '#999' },
 
-  // Modal Styles
+  // Styles cho Header của Modal List (Mới)
+  modalListHeader: {
+      height: 50,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 15,
+      backgroundColor: 'white',
+      borderBottomWidth: 1,
+      borderColor: '#eee',
+      marginTop: Platform.OS === 'ios' ? 40 : 0 // Tránh tai thỏ iPhone
+  },
+
+  // Modal Styles (Thủ công)
   modalOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20
   },
@@ -399,7 +444,7 @@ const styles = StyleSheet.create({
   btnSave: { backgroundColor: '#34C759' },
   btnText: { fontSize: 16, fontWeight: '600' },
 
-  // 4. Thêm Style mới cho nút chọn ảnh
+  // Image Picker Styles
   imagePickerBtn: {
     width: '100%',
     height: 150,
