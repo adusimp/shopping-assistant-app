@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Alert,
   RefreshControl,
+  Platform
 } from 'react-native';
 
 
@@ -105,22 +106,96 @@ export default function CartManager() {
     const date = new Date(isoString);
     return date.toLocaleString('vi-VN');
   };
+  const executeDelete = async (id: number) => {
+    try {
+      // Gọi API
+      const response = await fetch(`${API_URL}/cart/${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          // Thêm Authorization nếu API yêu cầu token
+          // 'Authorization': `Bearer ${token}` 
+        },
+      });
 
+      if (response.ok) {
+        // A. XÓA THÀNH CÔNG
+        console.log(`Đã xóa item ${id} thành công trên server`);
+
+        // QUAN TRỌNG: Cập nhật lại State để giao diện tự mất item đó
+        // (Thay 'setCartList' bằng tên hàm set state thực tế của bạn)
+        setCarts((prevList) => prevList.filter((item) => item.id !== id));
+
+        // Thông báo nhẹ (Tuỳ chọn)
+        if (Platform.OS !== 'web') {
+          Alert.alert("Thành công", "Đã xóa đơn hàng.");
+        }
+      } else {
+        // B. LỖI TỪ SERVER (ví dụ 404, 500)
+        Alert.alert("Thất bại", "Không thể xóa đơn hàng lúc này.");
+      }
+    } catch (error) {
+      // C. LỖI MẠNG / CODE
+      console.error("Lỗi xóa:", error);
+      Alert.alert("Lỗi", "Có lỗi xảy ra khi kết nối server.");
+    }
+  };
+
+  const handleDelete = (id: number) => {
+    console.log("Nút xóa được bấm, ID:", id);
+
+    // --- MÔI TRƯỜNG WEB ---
+    if (Platform.OS === 'web') {
+      // Dùng window.confirm của trình duyệt
+      const confirmDelete = window.confirm("Bạn có chắc chắn muốn xóa giỏ hàng này không?");
+      if (confirmDelete) {
+        executeDelete(id); // Gọi hàm xóa
+      }
+    }
+    // --- MÔI TRƯỜNG APP (Android/iOS) ---
+    else {
+      Alert.alert(
+        "Xác nhận xóa",
+        "Bạn có chắc chắn muốn xóa giỏ hàng này không?",
+        [
+          { text: "Hủy", style: "cancel" },
+          {
+            text: "Xóa",
+            style: "destructive", // Màu đỏ trên iOS
+            onPress: () => {
+              executeDelete(id); // Gọi hàm xóa
+            }
+          }
+        ]
+      );
+    }
+  };
   // === 3. CẬP NHẬT HÀM RENDER ITEM ===
   const renderItem = ({ item }: { item: Cart }) => (
     <TouchableOpacity
       style={styles.card}
-      // SỰ KIỆN BẤM VÀO CARD
+      // SỰ KIỆN BẤM VÀO CARD ĐỂ XEM CHI TIẾT
       onPress={() => {
         router.push({
-          pathname: '/list/[id]', // Đường dẫn tới file list/[id].tsx
-          params: { id: item.id } // Truyền ID của cart sang
+          pathname: '/list/[id]',
+          params: { id: item.id }
         });
       }}
     >
       <View style={styles.cardHeader}>
-        <Text style={styles.cardTitle}>{item.name}</Text>
-        <Text style={styles.cardId}>ID: {item.id}</Text>
+        {/* Phần thông tin bên trái */}
+        <View style={styles.headerInfo}>
+          <Text style={styles.cardTitle}>{item.name}</Text>
+          <Text style={styles.cardId}>ID: {item.id}</Text>
+        </View>
+
+        {/* Nút Xóa bên phải */}
+        <TouchableOpacity
+          style={styles.deleteButton}
+          onPress={() => handleDelete(item.id)}
+        >
+          <Text style={styles.deleteText}>Xóa</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.cardBody}>
@@ -194,14 +269,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f5f5',
     padding: 15,
   },
-  // Style cho Form
+  // --- Style cho Form (Giữ nguyên) ---
   inputContainer: {
     backgroundColor: 'white',
     padding: 15,
     borderRadius: 10,
     marginBottom: 20,
-    elevation: 3, // Bóng đổ cho Android
-    shadowColor: '#000', // Bóng đổ cho iOS
+    elevation: 3,
+    shadowColor: '#000',
     shadowOpacity: 0.1,
     shadowRadius: 4,
   },
@@ -237,7 +312,8 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 16,
   },
-  // Style cho Danh sách
+
+  // --- Style cho Danh sách (CẬP NHẬT) ---
   listContainer: {
     flex: 1,
   },
@@ -248,26 +324,65 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     borderLeftWidth: 5,
     borderLeftColor: '#007AFF',
+    // Thêm bóng đổ nhẹ cho card đẹp hơn
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
   },
+
+  // 1. Sửa lại header để căn giữa theo chiều dọc
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 5,
+    alignItems: 'center', // Quan trọng: căn giữa nút xóa và text
+    marginBottom: 8,
+    borderBottomWidth: 1, // (Tuỳ chọn) Thêm gạch chân mờ ngăn cách
+    borderBottomColor: '#f0f0f0',
+    paddingBottom: 8,
   },
+
+  // 2. Thêm style bao quanh Title và ID
+  headerInfo: {
+    flex: 1,          // Chiếm hết khoảng trống bên trái
+    marginRight: 10,  // Cách nút xóa ra 1 đoạn
+  },
+
   cardTitle: {
     fontSize: 16,
     fontWeight: 'bold',
+    color: '#333',
   },
   cardId: {
+    fontSize: 12,
     color: '#888',
     fontWeight: 'bold',
+    marginTop: 2, // Cách title ra 1 xíu
   },
+
+  // 3. Thêm style cho nút Xóa
+  deleteButton: {
+    backgroundColor: '#ffebee', // Màu nền đỏ rất nhạt
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  deleteText: {
+    color: '#d32f2f', // Màu chữ đỏ đậm
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+
+  // --- Phần Body giữ nguyên ---
   cardBody: {
     marginTop: 5,
   },
   label: {
     fontSize: 14,
     color: '#555',
+    marginBottom: 4,
   },
   value: {
     fontWeight: '600',
@@ -278,6 +393,7 @@ const styles = StyleSheet.create({
     color: '#999',
     marginTop: 5,
     fontStyle: 'italic',
+    textAlign: 'right', // Đẩy ngày tạo sang phải cho gọn (tuỳ chọn)
   },
   emptyText: {
     textAlign: 'center',

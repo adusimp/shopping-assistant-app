@@ -69,4 +69,18 @@ export class CartService {
       throw error;
     }
   }
+  async deleteCart(id: number) {
+    try {
+      const result = await this.cartRepository.delete({ id: id });
+
+      if (result.affected === 0) {
+        return { message: `cart not found id : ${id}` };
+      }
+
+      return { message: 'delete success' };
+    } catch (error) {
+      console.error(error);
+      throw error;
+    }
+  }
 }
