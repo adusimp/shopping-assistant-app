@@ -11,6 +11,7 @@ import {
 import { CartService } from './cart.service';
 import { CreateCartDto } from './dtos/create-cart.dto';
 import { UpdateCartDto } from './dtos/update-cart.dto';
+import { AddAiItemsBody } from './dtos/add-ai-item.dto';
 
 @Controller('cart')
 export class CartController {
@@ -34,5 +35,13 @@ export class CartController {
   @Delete(':id')
   async deleteCart(@Param('id') id: number) {
     return await this.cartService.deleteCart(id);
+  }
+  @Post('suggest')
+  async getSuggestion(@Body('cartName') cartName: string) {
+    return this.cartService.suggestProducts(cartName);
+  }
+  @Post('add-ai-items')
+  async addAiItems(@Body() body: AddAiItemsBody) {
+    return this.cartService.addAiItemsToCart(body);
   }
 }

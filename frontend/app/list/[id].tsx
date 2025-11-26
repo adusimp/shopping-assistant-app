@@ -75,6 +75,103 @@ export default function ListDetailScreen() {
   const [newCategory, setNewCategory] = useState(ProductCategory.OTHER);
   const [newQuantity, setNewQuantity] = useState('1');
 
+  // --- 1. STATE CHO AI ---
+  const [modalSuggestVisible, setModalSuggestVisible] = useState(false);
+  const [isSuggesting, setIsSuggesting] = useState(false);
+  const [suggestedItems, setSuggestedItems] = useState<any[]>([]); 
+  const [selectedSuggestions, setSelectedSuggestions] = useState<any[]>([]);
+
+  // Giả sử bạn đã có state 'cart' chứa thông tin giỏ hàng (id, name...)
+  // const [cart, setCart] = useState<Cart | null>(null); 
+
+  // --- 2. GỌI AI ĐỂ LẤY GỢI Ý ---
+  const handleGetSuggestion = async () => {
+    if (!cart || !cart.name) return; // Kiểm tra xem đã load được thông tin cart chưa
+
+    setIsSuggesting(true);
+    setSelectedSuggestions([]); // Reset lựa chọn
+    try {
+      // Gọi API Suggest mà chúng ta đã viết ở backend
+      const response = await fetch(`${API_URL}/cart/suggest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cartName: cart.name }), 
+      });
+      
+      const data = await response.json();
+      if (data.items) {
+        setSuggestedItems(data.items);
+        setModalSuggestVisible(true);
+      }
+    } catch (error) {
+      console.error(error);
+      Alert.alert("Lỗi", "AI đang bận, thử lại sau nhé!");
+    } finally {
+      setIsSuggesting(false);
+    }
+  };
+
+  // --- 3. XỬ LÝ TÍCH CHỌN ---
+  const toggleSuggestion = (item: any) => {
+    const exists = selectedSuggestions.find(i => i.name === item.name);
+    if (exists) {
+      setSelectedSuggestions(prev => prev.filter(i => i.name !== item.name));
+    } else {
+      setSelectedSuggestions(prev => [...prev, item]);
+    }
+  };
+
+// --- 4. LƯU CÁC MÓN ĐÃ CHỌN VÀO GIỎ HÀNG (DÙNG API MỚI) ---
+  const handleConfirmSuggestions = async () => {
+    if (selectedSuggestions.length === 0) return;
+
+    // Bật loading để chặn người dùng bấm lung tung
+    setIsSuggesting(true);
+
+    try {
+      // 1. Chuẩn bị dữ liệu (Payload) đúng form Backend yêu cầu
+      const payload = {
+        cartId: Number(id), // Chuyển id từ params (string) sang number
+        items: selectedSuggestions.map(item => ({
+          type: item.type, // 'NEW' hoặc 'EXISTING'
+          id: item.type === 'EXISTING' ? item.id : undefined, // Nếu NEW thì không cần gửi ID
+          name: item.name,
+          price: item.price ? Number(item.price) : 0, // Đảm bảo giá là số
+          img_url: item.img_url || null
+        }))
+      };
+
+      console.log("Gửi payload lên server:", payload);
+
+      // 2. Gọi API Bulk Insert (Gửi 1 lần duy nhất)
+      const response = await fetch(`${API_URL}/cart/add-ai-items`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (response.ok) {
+        // A. Thành công
+        Alert.alert("Thành công", `Đã thêm ${selectedSuggestions.length} món vào giỏ hàng!`);
+        setModalSuggestVisible(false); // Đóng Modal
+        setSelectedSuggestions([]);    // Reset lựa chọn
+        
+        // Load lại danh sách sản phẩm trong giỏ để thấy món mới
+        fetchCartItems(); 
+      } else {
+        // B. Lỗi từ server trả về
+        const errData = await response.json();
+        Alert.alert("Lỗi Server", errData.message || "Không thể thêm sản phẩm.");
+      }
+
+    } catch (error) {
+      console.error("Lỗi mạng:", error);
+      Alert.alert("Lỗi", "Không thể kết nối đến server.");
+    } finally {
+      setIsSuggesting(false); // Tắt loading
+    }
+  };
+
   useEffect(() => {
     if (!cartId) return;
     fetchCartDetails();
@@ -235,19 +332,35 @@ export default function ListDetailScreen() {
   // };
 
   const renderCartItem = ({ item }: { item: CartItem }) => (
-    <View style={styles.itemRow}>
-      <Image
-        source={{ uri: getFullImageUrl(item.img_url) || 'https://via.placeholder.com/50' }}
-        style={styles.itemImage}
-        resizeMode="cover"
-      />
-      <View style={styles.itemInfo}>
-        <Text style={styles.itemName}>{item.name}</Text>
-        <Text style={styles.itemQuantity}>Số lượng: x{item.quantity}</Text>
-      </View>
-      <Text style={styles.itemPrice}>{formatCurrency(item.total_price)}</Text>
+  <View style={styles.itemRow}>
+    {/* 1. Ảnh sản phẩm */}
+    <Image
+      source={{ uri: getFullImageUrl(item.img_url) || 'https://via.placeholder.com/50' }}
+      style={styles.itemImage}
+      resizeMode="cover"
+    />
+
+    {/* 2. Thông tin tên và số lượng */}
+    <View style={styles.itemInfo}>
+      <Text style={styles.itemName} numberOfLines={2}>{item.name}</Text>
+      <Text style={styles.itemQuantity}>Số lượng: x{item.quantity}</Text>
     </View>
-  );
+
+    {/* 3. Cột bên phải: Giá và Nút Xóa */}
+    <View style={{ alignItems: 'flex-end', marginLeft: 10 }}>
+      <Text style={styles.itemPrice}>{formatCurrency(item.total_price)}</Text>
+      
+      <TouchableOpacity 
+        style={{ marginTop: 8, padding: 4 }} // Thêm padding để dễ bấm hơn
+        onPress={() => {
+            // Gọi hàm xóa ở đây (truyền item.id)
+        }}
+      >
+        <Text style={{ color: '#ff3b30', fontSize: 12, fontWeight: '600' }}>Xóa</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+);
 
   if (loading) return <ActivityIndicator style={styles.centered} size="large" />;
 
@@ -273,7 +386,26 @@ export default function ListDetailScreen() {
           ),
         }}
       />
+{/* KHU VỰC NÚT BẤM */}
+      <View style={{flexDirection: 'row', gap: 10, marginBottom: 15}}>
+          {/* Nút Thêm Thủ Công (Cũ) */}
+          <TouchableOpacity 
+             style={[styles.btn, {flex: 1, backgroundColor: '#007AFF'}]} 
+             onPress={() => setModalManualVisible(true)}
+          >
+             <Text style={styles.btnText}>+ Thêm thủ công</Text>
+          </TouchableOpacity>
 
+          {/* NÚT AI GỢI Ý (MỚI) */}
+          <TouchableOpacity 
+             style={[styles.btn, {flex: 1, backgroundColor: '#6C5CE7', flexDirection: 'row', justifyContent: 'center', gap: 5}]}
+             onPress={handleGetSuggestion}
+             disabled={isSuggesting}
+          >
+             {isSuggesting ? <ActivityIndicator color="white" size="small" /> : <Text style={{color:'white'}}>✨</Text>}
+             <Text style={styles.btnText}>Gợi ý AI</Text>
+          </TouchableOpacity>
+      </View>
       <View style={styles.headerSection}>
         <View style={styles.headerRow}>
           <Text style={styles.sectionTitle}>Thông Tin Cart</Text>
@@ -295,9 +427,22 @@ export default function ListDetailScreen() {
           </View>
         )}
       </View>
-
-      <Text style={{ marginLeft: 15, fontWeight: '600', color: '#666', marginBottom: 5 }}>Giỏ hàng ({items.length})</Text>
-
+<View style={{ 
+  flexDirection: 'row',       // 1. Xếp ngang
+  justifyContent: 'space-between', // 2. Đẩy 1 cái sang trái, 1 cái sang phải
+  alignItems: 'center',       // 3. Căn giữa theo chiều dọc
+  marginBottom: 10 
+}}>
+  <Text style={{ marginLeft: 15, fontWeight: '600', color: '#666' }}>
+    Giỏ hàng ({items.length})
+  </Text>
+  
+  <TouchableOpacity onPress={()=>{}}>
+    <Text style={{ marginRight: 15, fontWeight: '600', color: 'red' }}>
+      Xóa tất cả
+    </Text>
+  </TouchableOpacity>
+</View>
       <FlatList
         data={items}
         keyExtractor={(item) => item.product_id.toString()}
@@ -331,68 +476,161 @@ export default function ListDetailScreen() {
         </View>
       </Modal>
 
-      {/* --- MODAL 2: THÊM THỦ CÔNG (Popup) --- */}
       <Modal
+  animationType="slide"
+  transparent={true}
+  visible={modalManualVisible}
+  onRequestClose={() => setModalManualVisible(false)}
+>
+  <KeyboardAvoidingView
+    behavior={Platform.OS === "ios" ? "padding" : "height"}
+    style={styles.modalOverlay}
+  >
+    <View style={styles.modalContent}>
+      <Text style={styles.modalTitle}>Thêm thủ công</Text>
+
+      <ScrollView showsVerticalScrollIndicator={false}>
+        {/* Nhập Tên */}
+        <Text style={styles.label}>Tên sản phẩm (*):</Text>
+        <TextInput 
+          style={styles.modalInput} 
+          value={newName} 
+          onChangeText={setNewName} 
+          placeholder="VD: Bánh kẹo..." 
+        />
+
+        {/* --- PHẦN CHỌN ẢNH (ĐÃ BỔ SUNG) --- */}
+        <Text style={styles.label}>Ảnh sản phẩm:</Text>
+        <View style={{ alignItems: 'center', marginBottom: 15 }}>
+          <TouchableOpacity onPress={pickImage} style={styles.imagePickerBtn}>
+            {newImage ? (
+              <Image source={{ uri: newImage }} style={styles.imagePreview} />
+            ) : (
+              <View style={{ alignItems: 'center' }}>
+                {/* Bạn có thể thay Text bằng Icon Camera nếu muốn */}
+                <Text style={{ fontSize: 30, color: '#ccc', marginBottom: 5 }}>📷</Text>
+                <Text style={{ color: '#666' }}>+ Chọn ảnh từ thư viện</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          
+          {/* Nút xóa ảnh nếu chọn nhầm */}
+          {newImage ? (
+            <TouchableOpacity onPress={() => setNewImage('')} style={{ padding: 5 }}>
+              <Text style={{ color: '#FF3B30', fontSize: 13, fontWeight: '500' }}>Xóa ảnh</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+        {/* ---------------------------------- */}
+
+        {/* Nhập Giá & Số lượng */}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+          <View style={{ width: '48%' }}>
+            <Text style={styles.label}>Giá (VNĐ):</Text>
+            <TextInput 
+              style={styles.modalInput} 
+              value={newPrice} 
+              onChangeText={setNewPrice} 
+              keyboardType="numeric" 
+              placeholder="0" 
+            />
+          </View>
+          <View style={{ width: '48%' }}>
+            <Text style={styles.label}>Số lượng:</Text>
+            <TextInput 
+              style={styles.modalInput} 
+              value={newQuantity} 
+              onChangeText={setNewQuantity} 
+              keyboardType="numeric" 
+              placeholder="1" 
+            />
+          </View>
+        </View>
+
+        {/* Chọn Category */}
+        <Text style={styles.label}>Loại (Category):</Text>
+        <View style={styles.pickerContainer}>
+          <Picker
+            selectedValue={newCategory}
+            onValueChange={(itemValue) => setNewCategory(itemValue)}
+            style={styles.picker}
+            mode="dropdown"
+          >
+            {Object.entries(CATEGORY_LABELS).map(([key, label]) => (
+              <Picker.Item key={key} label={label} value={key} />
+            ))}
+          </Picker>
+        </View>
+
+      </ScrollView>
+
+      {/* Nút Hủy / Lưu */}
+      <View style={styles.modalButtons}>
+        <TouchableOpacity style={[styles.btn, styles.btnCancel]} onPress={() => setModalManualVisible(false)}>
+          <Text style={styles.btnText}>Hủy</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.btn, styles.btnSave]} onPress={handleAddItem}>
+          <Text style={[styles.btnText, { color: 'white' }]}>Lưu</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  </KeyboardAvoidingView>
+</Modal>
+<Modal
+        visible={modalSuggestVisible}
         animationType="slide"
         transparent={true}
-        visible={modalManualVisible}
-        onRequestClose={() => setModalManualVisible(false)}
+        onRequestClose={() => setModalSuggestVisible(false)}
       >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          style={styles.modalOverlay}
-        >
+        <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Thêm thủ công</Text>
+            <Text style={styles.modalTitle}>Gợi ý cho "{cart?.name}"</Text>
+            <Text style={styles.modalSubtitle}>AI tìm thấy các món sau:</Text>
 
-            <ScrollView showsVerticalScrollIndicator={false}>
-              <Text style={styles.label}>Tên sản phẩm (*):</Text>
-              <TextInput style={styles.modalInput} value={newName} onChangeText={setNewName} placeholder="VD: Bánh kẹo..." />
+            <ScrollView style={styles.suggestionList}>
+              {suggestedItems.map((item, index) => {
+                const isSelected = selectedSuggestions.some(i => i.name === item.name);
+                const isExisting = item.type === 'EXISTING';
 
-              {/* ... (Phần chọn ảnh giữ nguyên) ... */}
+                return (
+                  <TouchableOpacity 
+                    key={index} 
+                    style={[styles.suggestionItem, isSelected && styles.suggestionItemSelected]}
+                    onPress={() => toggleSuggestion(item)}
+                  >
+                    {/* Checkbox */}
+                    <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
+                        {isSelected && <Text style={{color: 'white', fontSize: 12}}>✓</Text>}
+                    </View>
 
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                <View style={{ width: '48%' }}>
-                  <Text style={styles.label}>Giá (VNĐ):</Text>
-                  <TextInput style={styles.modalInput} value={newPrice} onChangeText={setNewPrice} keyboardType="numeric" placeholder="0" />
-                </View>
-                <View style={{ width: '48%' }}>
-                  <Text style={styles.label}>Số lượng:</Text>
-                  <TextInput style={styles.modalInput} value={newQuantity} onChangeText={setNewQuantity} keyboardType="numeric" placeholder="1" />
-                </View>
-              </View>
-
-              {/* --- PHẦN SỬA ĐỔI: CATEGORY PICKER --- */}
-              <Text style={styles.label}>Loại (Category):</Text>
-              <View style={styles.pickerContainer}>
-                <Picker
-                  selectedValue={newCategory}
-                  onValueChange={(itemValue) => setNewCategory(itemValue)}
-                  style={styles.picker}
-                  mode="dropdown" // Chỉ tác dụng trên Android
-                >
-                  {/* Render danh sách category từ object */}
-                  {Object.entries(CATEGORY_LABELS).map(([key, label]) => (
-                    <Picker.Item key={key} label={label} value={key} />
-                  ))}
-                </Picker>
-              </View>
-              {/* ------------------------------------- */}
-
+                    {/* Nội dung */}
+                    <View style={{flex: 1}}>
+                        <Text style={styles.itemName}>{item.name}</Text>
+                        {isExisting ? (
+                             <Text style={styles.tagExisting}>✅ Có sẵn • {item.price}đ</Text>
+                        ) : (
+                             <Text style={styles.tagNew}>⚠️ Mới (Chưa có trong kho)</Text>
+                        )}
+                    </View>
+                    
+                    {/* Ảnh */}
+                    {item.img_url && <Image source={{uri: item.img_url}} style={styles.itemThumb} />}
+                  </TouchableOpacity>
+                );
+              })}
             </ScrollView>
 
-            <View style={styles.modalButtons}>
-              <TouchableOpacity style={[styles.btn, styles.btnCancel]} onPress={() => setModalManualVisible(false)}>
-                <Text style={styles.btnText}>Hủy</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.btn, styles.btnSave]} onPress={handleAddItem}>
-                <Text style={[styles.btnText, { color: 'white' }]}>Lưu</Text>
-              </TouchableOpacity>
+            <View style={styles.modalFooter}>
+                <TouchableOpacity style={styles.btnCancel} onPress={() => setModalSuggestVisible(false)}>
+                    <Text style={{color: '#666'}}>Hủy</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.btnConfirm} onPress={handleConfirmSuggestions}>
+                    <Text style={{color: 'white', fontWeight: 'bold'}}>Thêm ngay</Text>
+                </TouchableOpacity>
             </View>
           </View>
-        </KeyboardAvoidingView>
+        </View>
       </Modal>
-
     </View>
   );
 }
@@ -409,12 +647,11 @@ const styles = StyleSheet.create({
     alignItems: 'center'
   },
 
-  // --- HEADER CỦA SCREEN ---
+  // --- HEADER CỦA SCREEN (Phần thông tin Cart) ---
   headerSection: {
     backgroundColor: '#fff',
     padding: 15,
     marginBottom: 10,
-    // Thêm bóng đổ nhẹ cho header
     shadowColor: '#000',
     shadowOpacity: 0.05,
     shadowRadius: 2,
@@ -427,7 +664,7 @@ const styles = StyleSheet.create({
     marginBottom: 10
   },
   sectionTitle: {
-    fontSize: 18, // Tăng nhẹ cho rõ tiêu đề
+    fontSize: 18,
     fontWeight: 'bold',
     color: '#333'
   },
@@ -441,7 +678,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     color: '#444'
   },
-  input: {
+  input: { // Input sửa tên Cart
     borderWidth: 1,
     borderColor: '#ddd',
     borderRadius: 6,
@@ -457,16 +694,24 @@ const styles = StyleSheet.create({
     fontSize: 14
   },
 
-  // --- ITEM TRONG DANH SÁCH ---
+  // --- KHU VỰC NÚT BẤM (Thêm thủ công + AI) ---
+  // Style cho hàng chứa 2 nút thêm
+  actionButtonRow: {
+    flexDirection: 'row', 
+    gap: 10, 
+    marginBottom: 15,
+    paddingHorizontal: 15 // Thêm padding nếu nút bị sát lề
+  },
+
+  // --- ITEM TRONG DANH SÁCH (Sản phẩm đã thêm) ---
   itemRow: {
     backgroundColor: '#fff',
     padding: 12,
     marginHorizontal: 15,
     marginBottom: 10,
-    borderRadius: 12, // Bo tròn nhiều hơn chút cho hiện đại
+    borderRadius: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    // Bóng đổ mềm mại
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.1,
@@ -474,7 +719,7 @@ const styles = StyleSheet.create({
     elevation: 2
   },
   itemImage: {
-    width: 60, // Tăng kích thước ảnh chút
+    width: 60,
     height: 60,
     borderRadius: 8,
     backgroundColor: '#eee',
@@ -507,9 +752,9 @@ const styles = StyleSheet.create({
     fontSize: 16
   },
 
-  // --- HEADER MODAL DANH SÁCH SẢN PHẨM ---
+  // --- [BỔ SUNG] HEADER CỦA MÀN HÌNH CHI TIẾT (Có nút Back) ---
   modalListHeader: {
-    height: 60, // Tăng chiều cao để dễ bấm
+    height: 50, // Hoặc 60 tùy thiết kế
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -517,11 +762,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     borderBottomWidth: 1,
     borderColor: '#eee',
-    // Xử lý tai thỏ (SafeArea) tốt hơn nếu dùng View thường
-    paddingTop: Platform.OS === 'ios' ? 0 : 0
+    // Nếu dùng SafeAreaView thì có thể bỏ margin này, 
+    // nếu dùng View thường thì giữ lại để tránh tai thỏ
+    marginTop: Platform.OS === 'ios' ? 40 : 0 
   },
 
-  // --- MODAL THÊM THỦ CÔNG ---
+  // --- CÁC MODAL (CHUNG) ---
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -544,10 +790,17 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    marginBottom: 20,
+    marginBottom: 5,
     textAlign: 'center',
     color: '#333'
   },
+  modalSubtitle: {
+    textAlign: 'center',
+    color: '#666',
+    marginBottom: 15
+  },
+
+  // --- FORM INPUT TRONG MODAL ---
   label: {
     fontSize: 14,
     fontWeight: '600',
@@ -555,24 +808,20 @@ const styles = StyleSheet.create({
     color: '#555',
     marginTop: 10
   },
-
-  // Style cho TextInput
   modalInput: {
     borderWidth: 1,
     borderColor: '#ddd',
     borderRadius: 8,
-    padding: 12, // Padding rộng hơn cho dễ nhập
+    padding: 12,
     fontSize: 16,
     backgroundColor: '#fafafa'
   },
-
-  // Style MỚI cho Picker (Dropdown Category)
   pickerContainer: {
     borderWidth: 1,
     borderColor: '#ddd',
     borderRadius: 8,
     backgroundColor: '#fafafa',
-    height: 50, // Chiều cao cố định bằng TextInput
+    height: 50,
     justifyContent: 'center',
   },
   picker: {
@@ -580,32 +829,51 @@ const styles = StyleSheet.create({
     height: '100%',
   },
 
-  // Style cho nút bấm trong Modal
+  // --- NÚT BẤM (Footer Modal) ---
   modalButtons: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 30
+    marginTop: 20,
+    alignItems: 'center'
   },
-  btn: {
-    flex: 1,
+  btn: { // Style nút chung
+    flex: 1, // Để chia đều chiều ngang nếu cần
     padding: 14,
     borderRadius: 10,
-    alignItems: 'center'
+    alignItems: 'center',
+    justifyContent: 'center'
   },
   btnCancel: {
     backgroundColor: '#f2f2f7',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 8,
     marginRight: 10
   },
   btnSave: {
     backgroundColor: '#34C759',
-    shadowColor: '#34C759',
-    shadowOpacity: 0.4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 4
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    elevation: 2
+  },
+  btnConfirm: { // Nút xác nhận AI
+    backgroundColor: '#6C5CE7',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 8
   },
   btnText: {
     fontSize: 16,
     fontWeight: '600'
+  },
+
+  // Footer của Modal AI (để căn chỉnh nút Hủy và Thêm)
+  modalFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 10
   },
 
   // --- IMAGE PICKER ---
@@ -618,7 +886,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1.5,
     borderColor: '#ddd',
-    borderStyle: 'dashed', // Viền nét đứt
+    borderStyle: 'dashed',
     marginTop: 5,
     marginBottom: 5
   },
@@ -627,5 +895,62 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 10,
     resizeMode: 'cover',
+  },
+
+  // --- AI SUGGESTION LIST (MỚI) ---
+  suggestionList: {
+    marginBottom: 20,
+  },
+  suggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#eee',
+    borderRadius: 8,
+    marginBottom: 8,
+    backgroundColor: '#fafafa'
+  },
+  suggestionItemSelected: {
+    borderColor: '#6C5CE7',
+    backgroundColor: '#F0F0FF'
+  },
+  
+  // Checkbox
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#ccc',
+    marginRight: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'white'
+  },
+  checkboxChecked: {
+    backgroundColor: '#6C5CE7',
+    borderColor: '#6C5CE7'
+  },
+  
+  // Tag phân loại
+  tagExisting: {
+    fontSize: 12,
+    color: '#00b894', 
+    marginTop: 4,
+    fontWeight: '500'
+  },
+  tagNew: {
+    fontSize: 12,
+    color: '#e17055',
+    marginTop: 4,
+    fontWeight: '500'
+  },
+  itemThumb: {
+    width: 40,
+    height: 40,
+    borderRadius: 4,
+    marginLeft: 10,
+    backgroundColor: '#eee'
   },
 });

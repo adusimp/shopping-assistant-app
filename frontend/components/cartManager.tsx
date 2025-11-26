@@ -10,14 +10,17 @@ import {
   ActivityIndicator,
   Alert,
   RefreshControl,
-  Platform
+  Platform,
+  Modal,
+  ScrollView,
+  Image
 } from 'react-native';
-
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { getFullImageUrl } from '@/common/function/getImageUrl';
 
 // TODO: Thay đổi IP này thành IP máy tính của bạn
 const API_URL = process.env.EXPO_PUBLIC_API_URL;
 
-// Định nghĩa kiểu dữ liệu cho Cart (dựa trên output bạn cung cấp)
 interface Cart {
   id: number;
   name: string;
@@ -27,23 +30,87 @@ interface Cart {
 }
 
 export default function CartManager() {
-  // State cho danh sách cart
   const [carts, setCarts] = useState<Cart[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // State cho form tạo mới
   const [name, setName] = useState('');
-  // Mặc định lấy thời gian hiện tại + 1 ngày để làm mẫu
-  const [notifyAt, setNotifyAt] = useState(new Date(Date.now() + 86400000).toISOString().slice(0, 19));
+
+  const [date, setDate] = useState(new Date());
+  const [showPicker, setShowPicker] = useState(false);
+  const [mode, setMode] = useState<'date' | 'time'>('date');
+
+  
+  // --- XỬ LÝ DATE PICKER (DÙNG CHUNG) ---
+  const onChangeDate = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowPicker(false);
+    }
+    if (selectedDate) {
+      setDate(selectedDate);
+    }
+  };
+
+  const showMode = (currentMode: 'date' | 'time') => {
+    setShowPicker(true);
+    setMode(currentMode);
+  };
+
+  // --- HÀM HỖ TRỢ RIÊNG CHO WEB ---
+
+  // Lấy chuỗi ngày hôm nay (YYYY-MM-DD) cho thuộc tính 'min'
+  const getTodayString = () => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // 1. Chuyển Date sang chuỗi YYYY-MM-DD (để hiển thị vào ô ngày)
+  const formatDateForWeb = (date: Date) => {
+    const d = new Date(date);
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    return d.toISOString().split('T')[0];
+  };
+
+  // 2. Chuyển Date sang chuỗi HH:mm (để hiển thị vào ô giờ)
+  const formatTimeForWeb = (date: Date) => {
+    const d = new Date(date);
+    const hh = d.getHours().toString().padStart(2, '0');
+    const mm = d.getMinutes().toString().padStart(2, '0');
+    return `${hh}:${mm}`;
+  };
+
+  // 3. Xử lý khi chọn Ngày trên Web
+  const handleWebDateChange = (e: any) => {
+    const newDateStr = e.target.value;
+    if (!newDateStr) return;
+
+    const newDate = new Date(date);
+    const [year, month, day] = newDateStr.split('-').map(Number);
+    newDate.setFullYear(year, month - 1, day);
+    setDate(newDate);
+  };
+
+  // 4. Xử lý khi chọn Giờ trên Web
+  const handleWebTimeChange = (e: any) => {
+    const newTimeStr = e.target.value;
+    if (!newTimeStr) return;
+
+    const [hours, minutes] = newTimeStr.split(':').map(Number);
+    const newDate = new Date(date);
+    newDate.setHours(hours);
+    newDate.setMinutes(minutes);
+    setDate(newDate);
+  };
+
 
   // 1. Hàm GET: Lấy danh sách cart
   const fetchCarts = async () => {
     try {
-      const response = await fetch(`${API_URL}/cart`); // Đường dẫn API GET của bạn
+      const response = await fetch(`${API_URL}/cart`);
       const data = await response.json();
-
-      // Sắp xếp mới nhất lên đầu (tùy chọn)
       const sortedData = data.sort((a: Cart, b: Cart) => b.id - a.id);
       setCarts(sortedData);
     } catch (error) {
@@ -55,7 +122,6 @@ export default function CartManager() {
     }
   };
 
-  // Gọi API khi màn hình load lần đầu
   useEffect(() => {
     fetchCarts();
   }, []);
@@ -68,12 +134,15 @@ export default function CartManager() {
     }
 
     try {
+      const offset = date.getTimezoneOffset() * 60000;
+      const localISOTime = (new Date(date.getTime() - offset)).toISOString().slice(0, 19);
+
       const payload = {
         name: name,
-        notify_at: notifyAt, // Gửi chuỗi ISO 8601
+        notify_at: localISOTime,
       };
 
-      const response = await fetch(`${API_URL}/cart`, { // Đường dẫn API POST của bạn
+      const response = await fetch(`${API_URL}/cart`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -83,8 +152,9 @@ export default function CartManager() {
 
       if (response.ok) {
         Alert.alert('Thành công', 'Đã tạo Cart mới!');
-        setName(''); // Reset ô nhập
-        fetchCarts(); // Load lại danh sách ngay lập tức
+        setName('');
+        setDate(new Date());
+        fetchCarts();
       } else {
         Alert.alert('Thất bại', 'Server trả về lỗi');
       }
@@ -94,87 +164,52 @@ export default function CartManager() {
     }
   };
 
-  // Xử lý kéo xuống để refresh
-  const onRefresh = () => {
-    setRefreshing(true);
-    fetchCarts();
-  };
-
-  // Component hiển thị từng dòng trong danh sách
-  const formatDateTime = (isoString: string) => {
-    if (!isoString) return '';
-    const date = new Date(isoString);
-    return date.toLocaleString('vi-VN');
-  };
+  // 3. Hàm DELETE: Xóa cart
   const executeDelete = async (id: number) => {
     try {
-      // Gọi API
       const response = await fetch(`${API_URL}/cart/${id}`, {
         method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          // Thêm Authorization nếu API yêu cầu token
-          // 'Authorization': `Bearer ${token}` 
-        },
+        headers: { 'Content-Type': 'application/json' },
       });
 
       if (response.ok) {
-        // A. XÓA THÀNH CÔNG
-        console.log(`Đã xóa item ${id} thành công trên server`);
-
-        // QUAN TRỌNG: Cập nhật lại State để giao diện tự mất item đó
-        // (Thay 'setCartList' bằng tên hàm set state thực tế của bạn)
         setCarts((prevList) => prevList.filter((item) => item.id !== id));
-
-        // Thông báo nhẹ (Tuỳ chọn)
         if (Platform.OS !== 'web') {
           Alert.alert("Thành công", "Đã xóa đơn hàng.");
         }
       } else {
-        // B. LỖI TỪ SERVER (ví dụ 404, 500)
         Alert.alert("Thất bại", "Không thể xóa đơn hàng lúc này.");
       }
     } catch (error) {
-      // C. LỖI MẠNG / CODE
       console.error("Lỗi xóa:", error);
       Alert.alert("Lỗi", "Có lỗi xảy ra khi kết nối server.");
     }
   };
 
   const handleDelete = (id: number) => {
-    console.log("Nút xóa được bấm, ID:", id);
-
-    // --- MÔI TRƯỜNG WEB ---
     if (Platform.OS === 'web') {
-      // Dùng window.confirm của trình duyệt
       const confirmDelete = window.confirm("Bạn có chắc chắn muốn xóa giỏ hàng này không?");
-      if (confirmDelete) {
-        executeDelete(id); // Gọi hàm xóa
-      }
-    }
-    // --- MÔI TRƯỜNG APP (Android/iOS) ---
-    else {
+      if (confirmDelete) executeDelete(id);
+    } else {
       Alert.alert(
         "Xác nhận xóa",
         "Bạn có chắc chắn muốn xóa giỏ hàng này không?",
         [
           { text: "Hủy", style: "cancel" },
-          {
-            text: "Xóa",
-            style: "destructive", // Màu đỏ trên iOS
-            onPress: () => {
-              executeDelete(id); // Gọi hàm xóa
-            }
-          }
+          { text: "Xóa", style: "destructive", onPress: () => executeDelete(id) }
         ]
       );
     }
   };
-  // === 3. CẬP NHẬT HÀM RENDER ITEM ===
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    fetchCarts();
+  };
+
   const renderItem = ({ item }: { item: Cart }) => (
     <TouchableOpacity
       style={styles.card}
-      // SỰ KIỆN BẤM VÀO CARD ĐỂ XEM CHI TIẾT
       onPress={() => {
         router.push({
           pathname: '/list/[id]',
@@ -183,13 +218,11 @@ export default function CartManager() {
       }}
     >
       <View style={styles.cardHeader}>
-        {/* Phần thông tin bên trái */}
         <View style={styles.headerInfo}>
           <Text style={styles.cardTitle}>{item.name}</Text>
           <Text style={styles.cardId}>ID: {item.id}</Text>
         </View>
 
-        {/* Nút Xóa bên phải */}
         <TouchableOpacity
           style={styles.deleteButton}
           onPress={() => handleDelete(item.id)}
@@ -209,9 +242,10 @@ export default function CartManager() {
 
   return (
     <View style={styles.container}>
-      {/* --- PHẦN FORM NHẬP LIỆU --- */}
       <View style={styles.inputContainer}>
         <Text style={styles.sectionTitle}>Tạo Cart Mới</Text>
+
+        <Text style={styles.label}>Tên Cart:</Text>
 
         <TextInput
           style={styles.input}
@@ -220,20 +254,103 @@ export default function CartManager() {
           onChangeText={setName}
         />
 
-        <TextInput
-          style={styles.input}
-          placeholder="Thời gian (YYYY-MM-DDTHH:mm:ss)"
-          value={notifyAt}
-          onChangeText={setNotifyAt}
-        />
-        <Text style={styles.hint}>Định dạng: YYYY-MM-DDTHH:mm:ss</Text>
+       
+        <Text style={styles.label}>Thời gian thông báo:</Text>
+
+        {/* KHU VỰC CHỌN NGÀY GIỜ */}
+        {Platform.OS === 'web' ? (
+          <View style={{ flexDirection: 'row', gap: 20, marginBottom: 15 }}>
+            {/* CỘT CHỌN NGÀY */}
+            <View>
+              <Text style={styles.webLabel}>Ngày:</Text>
+              {/* @ts-ignore */}
+              {React.createElement('input', {
+                type: 'date',
+                value: formatDateForWeb(date),
+                onChange: handleWebDateChange,
+                min: getTodayString(), // <--- ĐÃ THÊM: KHÔNG CHO CHỌN NGÀY TRONG QUÁ KHỨ
+                style: {
+                  padding: 10,
+                  borderRadius: 5,
+                  border: '1px solid #ccc',
+                  backgroundColor: 'white',
+                  height: 40,
+                  width: 150,
+                  fontSize: 14,
+                  color: '#333'
+                }
+              })}
+            </View>
+
+            {/* CỘT CHỌN GIỜ */}
+            <View>
+              <Text style={styles.webLabel}>Giờ:</Text>
+              {/* @ts-ignore */}
+              {React.createElement('input', {
+                type: 'time',
+                value: formatTimeForWeb(date),
+                onChange: handleWebTimeChange,
+                style: {
+                  padding: 10,
+                  borderRadius: 5,
+                  border: '1px solid #ccc',
+                  backgroundColor: 'white',
+                  height: 40,
+                  width: 120,
+                  fontSize: 14,
+                  color: '#333'
+                }
+              })}
+            </View>
+          </View>
+        ) : (
+          /* HIỂN THỊ TRÊN MOBILE */
+          <>
+            <View style={styles.dateTimeDisplay}>
+              <Text style={styles.dateTimeText}>
+                {date.toLocaleDateString('vi-VN')} - {date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
+              </Text>
+            </View>
+
+            <View style={styles.dateBtnContainer}>
+              <TouchableOpacity style={styles.dateBtn} onPress={() => showMode('date')}>
+                <Text style={styles.dateBtnText}>📅 Chọn Ngày</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.dateBtn} onPress={() => showMode('time')}>
+                <Text style={styles.dateBtnText}>⏰ Chọn Giờ</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Picker ẩn hiện cho Mobile */}
+            {showPicker && (
+              <DateTimePicker
+                testID="dateTimePicker"
+                value={date}
+                mode={mode}
+                is24Hour={true}
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={onChangeDate}
+                minimumDate={new Date()} // <--- ĐÃ THÊM: KHÔNG CHO CHỌN NGÀY TRONG QUÁ KHỨ
+              />
+            )}
+
+            {/* Nút Xong cho iOS */}
+            {Platform.OS === 'ios' && showPicker && (
+              <TouchableOpacity
+                style={[styles.button, { backgroundColor: '#f0f0f0', marginTop: 5, marginBottom: 10 }]}
+                onPress={() => setShowPicker(false)}>
+                <Text style={{ color: '#007AFF' }}>Xong / Đóng</Text>
+              </TouchableOpacity>
+            )}
+          </>
+        )}
 
         <TouchableOpacity style={styles.button} onPress={handleCreateCart}>
           <Text style={styles.buttonText}>TẠO MỚI</Text>
         </TouchableOpacity>
       </View>
 
-      {/* --- PHẦN DANH SÁCH --- */}
       <View style={styles.listContainer}>
         <Text style={styles.sectionTitle}>Danh Sách Cart ({carts.length})</Text>
 
@@ -252,15 +369,15 @@ export default function CartManager() {
           />
         )}
       </View>
+     
     </View>
   );
 }
 
-// Hàm format ngày giờ cho đẹp
 const formatDateTime = (isoString: string) => {
   if (!isoString) return '';
   const date = new Date(isoString);
-  return date.toLocaleString('vi-VN'); // Chuyển sang giờ Việt Nam
+  return date.toLocaleString('vi-VN');
 };
 
 const styles = StyleSheet.create({
@@ -269,7 +386,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f5f5',
     padding: 15,
   },
-  // --- Style cho Form (Giữ nguyên) ---
   inputContainer: {
     backgroundColor: 'white',
     padding: 15,
@@ -291,29 +407,67 @@ const styles = StyleSheet.create({
     borderColor: '#ddd',
     borderRadius: 8,
     padding: 10,
-    marginBottom: 10,
+    marginBottom: 5,
     fontSize: 16,
     backgroundColor: '#fafafa',
   },
-  hint: {
+  label: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 5,
+    marginTop: 10,
+  },
+  webLabel: {
     fontSize: 12,
-    color: '#888',
+    color: '#666',
+    marginBottom: 5
+  },
+  dateTimeDisplay: {
+    backgroundColor: '#f0f0f0',
+    padding: 12,
+    borderRadius: 8,
     marginBottom: 10,
-    marginTop: -5,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#ddd'
+  },
+  dateTimeText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#007AFF',
+  },
+  dateBtnContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 15,
+  },
+  dateBtn: {
+    flex: 0.48,
+    backgroundColor: 'white',
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    alignItems: 'center',
+  },
+  dateBtnText: {
+    color: '#007AFF',
+    fontWeight: '600',
+    fontSize: 14
   },
   button: {
     backgroundColor: '#007AFF',
     padding: 12,
     borderRadius: 8,
     alignItems: 'center',
+    marginTop: 5
   },
   buttonText: {
     color: 'white',
     fontWeight: 'bold',
     fontSize: 16,
   },
-
-  // --- Style cho Danh sách (CẬP NHẬT) ---
   listContainer: {
     flex: 1,
   },
@@ -324,30 +478,24 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     borderLeftWidth: 5,
     borderLeftColor: '#007AFF',
-    // Thêm bóng đổ nhẹ cho card đẹp hơn
     elevation: 2,
     shadowColor: '#000',
     shadowOpacity: 0.05,
     shadowRadius: 2,
   },
-
-  // 1. Sửa lại header để căn giữa theo chiều dọc
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center', // Quan trọng: căn giữa nút xóa và text
+    alignItems: 'center',
     marginBottom: 8,
-    borderBottomWidth: 1, // (Tuỳ chọn) Thêm gạch chân mờ ngăn cách
+    borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
     paddingBottom: 8,
   },
-
-  // 2. Thêm style bao quanh Title và ID
   headerInfo: {
-    flex: 1,          // Chiếm hết khoảng trống bên trái
-    marginRight: 10,  // Cách nút xóa ra 1 đoạn
+    flex: 1,
+    marginRight: 10,
   },
-
   cardTitle: {
     fontSize: 16,
     fontWeight: 'bold',
@@ -357,12 +505,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#888',
     fontWeight: 'bold',
-    marginTop: 2, // Cách title ra 1 xíu
+    marginTop: 2,
   },
-
-  // 3. Thêm style cho nút Xóa
   deleteButton: {
-    backgroundColor: '#ffebee', // Màu nền đỏ rất nhạt
+    backgroundColor: '#ffebee',
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 6,
@@ -370,19 +516,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   deleteText: {
-    color: '#d32f2f', // Màu chữ đỏ đậm
+    color: '#d32f2f',
     fontSize: 12,
     fontWeight: 'bold',
   },
-
-  // --- Phần Body giữ nguyên ---
   cardBody: {
     marginTop: 5,
-  },
-  label: {
-    fontSize: 14,
-    color: '#555',
-    marginBottom: 4,
   },
   value: {
     fontWeight: '600',
@@ -393,11 +532,12 @@ const styles = StyleSheet.create({
     color: '#999',
     marginTop: 5,
     fontStyle: 'italic',
-    textAlign: 'right', // Đẩy ngày tạo sang phải cho gọn (tuỳ chọn)
+    textAlign: 'right',
   },
   emptyText: {
     textAlign: 'center',
     marginTop: 20,
     color: '#888',
   },
+ 
 });

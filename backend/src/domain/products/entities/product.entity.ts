@@ -11,10 +11,10 @@ export class Product {
   @Column()
   name: string;
 
-  @Column('decimal', { precision: 10, scale: 2 })
+  @Column('decimal', { precision: 10, scale: 2,default:0 })
   price: number;
 
-  @Column()
+  @Column({nullable:true})
   img_url: string;
 
   @Column({
