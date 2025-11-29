@@ -74,6 +74,7 @@ export class ProductService {
         'p.name AS name',
         'p.img_url AS img_url',
         'cp.quantity AS quantity',
+        'cp.is_bought AS is_bought',
         '(p.price * cp.quantity) AS total_price',
       ])
       .getRawMany();

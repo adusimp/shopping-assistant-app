@@ -14,6 +14,7 @@ import { CartProduct } from '../products/entities/cart-product.entity';
 import * as dotenv from 'dotenv';
 import { ProductCategory } from 'src/common/enum/product-categories.enum';
 import { AddAiItemsBody } from './dtos/add-ai-item.dto';
+import { SuggestPriceDto, UpdatePriceDto } from './dtos/price-suggestion.dto';
 dotenv.config();
 
 @Injectable()
@@ -25,7 +26,7 @@ export class CartService {
     private readonly cartRepository: Repository<Cart>,
     @InjectRepository(Product)
     private productRepository: Repository<Product>,
-    @InjectRepository(Product)
+    @InjectRepository(CartProduct)
     private cartProductRepository: Repository<CartProduct>,
     private dataSource : DataSource
   ) {
@@ -278,4 +279,129 @@ async suggestProducts(cartName: string) {
       await queryRunner.release();
     }
   }
+
+  async removeItemFromCart(cartId: number, productId: number) {
+    try {
+      await this.dataSource.manager.delete(CartProduct,{ cart_id: cartId, product_id: productId });
+      return { message: 'Item removed from cart' };
+    } catch (error) {
+      console.error(error);
+      throw error;
+    }
+  }
+  async removeAllItemsFromCart(cartId: number) {
+    try {
+      await this.dataSource.manager.delete(CartProduct,{ cart_id: cartId });
+      return { message: 'All items removed from cart' };
+    } catch (error) {
+      console.error(error);
+      throw error;
+    }
+  }
+
+  // API 1: GỢI Ý GIÁ (Sửa đổi: Luôn hỏi AI)
+  async suggestPrice(dto: SuggestPriceDto) {
+    const { productName, productId } = dto;
+    
+    let foundId: number | null = productId || null;
+    let historyPrice = 0;
+    let aiPrice = 0;
+
+    // BƯỚC 1: TÌM THÔNG TIN TRONG DB (Để lấy ID và Giá cũ)
+    let existingProduct ;
+    
+    if (productId) {
+      existingProduct = await this.productRepository.findOne({ where: { id: productId } });
+    } else {
+      existingProduct = await this.productRepository.findOne({
+        where: { name: ILike(`%${productName}%`) },
+        order: { id: 'DESC' },
+      });
+    }
+
+    if (existingProduct) {
+      foundId = existingProduct.id;
+      historyPrice = Number(existingProduct.price); // Lưu lại giá cũ để tham khảo
+    }
+
+    // BƯỚC 2: LUÔN LUÔN HỎI AI (Bỏ đoạn check if (historyPrice > 0) return...)
+    try {
+      // Prompt nhấn mạnh việc lấy giá hiện tại
+      const prompt = `
+        Định giá thị trường hiện tại ở Việt Nam cho sản phẩm: "${productName}".
+        YÊU CẦU: 
+        1. Trả về MỘT SỐ NGUYÊN DUY NHẤT (VND). 
+        2. Không giải thích. Ví dụ: 15000.
+        3. Nếu không xác định được, trả về 0.
+      `;
+      
+      const result = await this.model.generateContent(prompt);
+      const text = result.response.text().replace(/[^0-9]/g, '');
+      aiPrice = parseInt(text) || 0;
+      
+    } catch (error) {
+      console.error('AI Suggest Price Error:', error);
+      // Nếu AI lỗi, aiPrice vẫn là 0
+    }
+
+    // BƯỚC 3: TRẢ VỀ CẢ HAI
+    console.log(foundId, historyPrice, aiPrice);
+    return {
+      id: foundId,       // ID sản phẩm trong kho (quan trọng để update)
+      aiPrice: aiPrice,  // Giá mới từ AI
+      historyPrice: historyPrice, // Giá cũ trong kho
+      
+      // Logic gợi ý cuối cùng: Nếu AI có giá thì lấy AI, không thì lấy lịch sử
+      suggestedPrice: aiPrice > 0 ? aiPrice : historyPrice, 
+      source: aiPrice > 0 ? 'AI' : (historyPrice > 0 ? 'HISTORY' : 'NONE')
+    };
+    
+  }
+  // ... (Hàm suggestPrice đã viết ở câu trả lời trước) ...
+
+  // API 2: CẬP NHẬT GIÁ
+  async updatePrice(dto: UpdatePriceDto) {
+    const { id, price } = dto;
+
+    // 1. Kiểm tra sản phẩm có tồn tại không
+    const product = await this.productRepository.findOne({ where: { id } });
+    if (!product) {
+      throw new NotFoundException(`Sản phẩm ID ${id} không tồn tại`);
+    }
+
+    // 2. Thực hiện Update
+    await this.productRepository.update(id, { price });
+
+    return { 
+      success: true, 
+      message: 'Đã cập nhật giá mới thành công', 
+      id, 
+      newPrice: price 
+    };
+  }
+
+  // --- HÀM TOGGLE TRẠNG THÁI MUA ---
+  async toggleItemStatus(cartId: number, productId: number) {
+    // 1. Tìm item trong bảng nối
+    const cartItem = await this.cartProductRepository.findOne({
+      where: { cart_id: cartId, product_id: productId },
+    });
+
+    if (!cartItem) {
+      throw new NotFoundException('Sản phẩm không có trong giỏ hàng');
+    }
+
+    // 2. Đảo trạng thái
+    cartItem.is_bought = !cartItem.is_bought;
+
+    // 3. Lưu lại
+    await this.cartProductRepository.save(cartItem);
+
+    return { 
+      message: 'Đã cập nhật trạng thái', 
+      is_bought: cartItem.is_bought,
+      product_id: productId 
+    };
+  }
+
 }

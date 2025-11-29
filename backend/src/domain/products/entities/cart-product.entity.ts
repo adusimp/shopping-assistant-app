@@ -14,6 +14,9 @@ export class CartProduct {
   @Column()
   quantity: number;
 
+  @Column({ default: false }) // Mặc định là chưa mua
+  is_bought: boolean;
+
   @ManyToOne(() => Cart, (cart) => cart.cartProducts, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'cart_id' })       // 👈 FIX HERE
   cart: Cart;
