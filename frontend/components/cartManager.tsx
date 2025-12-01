@@ -11,12 +11,9 @@ import {
   Alert,
   RefreshControl,
   Platform,
-  Modal,
-  ScrollView,
-  Image
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { getFullImageUrl } from '@/common/function/getImageUrl';
+import { scheduleCartNotification } from '@/common/notificationHelper';
 
 // TODO: Thay đổi IP này thành IP máy tính của bạn
 const API_URL = process.env.EXPO_PUBLIC_API_URL;
@@ -27,6 +24,7 @@ interface Cart {
   notify_at: string | null;
   created_at: string;
   updated_at: string;
+  budget: number; // Thêm trường này để hiển thị nếu cần (tuỳ chọn)
 }
 
 export default function CartManager() {
@@ -34,14 +32,16 @@ export default function CartManager() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Form States
   const [name, setName] = useState('');
+  const [budget, setBudget] = useState(''); // <--- 1. STATE MỚI CHO NGÂN SÁCH
 
+  // Date Picker States
   const [date, setDate] = useState(new Date());
   const [showPicker, setShowPicker] = useState(false);
   const [mode, setMode] = useState<'date' | 'time'>('date');
 
-  
-  // --- XỬ LÝ DATE PICKER (DÙNG CHUNG) ---
+  // --- XỬ LÝ DATE PICKER ---
   const onChangeDate = (event: any, selectedDate?: Date) => {
     if (Platform.OS === 'android') {
       setShowPicker(false);
@@ -56,9 +56,7 @@ export default function CartManager() {
     setMode(currentMode);
   };
 
-  // --- HÀM HỖ TRỢ RIÊNG CHO WEB ---
-
-  // Lấy chuỗi ngày hôm nay (YYYY-MM-DD) cho thuộc tính 'min'
+  // --- HÀM HỖ TRỢ WEB ---
   const getTodayString = () => {
     const d = new Date();
     const year = d.getFullYear();
@@ -67,14 +65,12 @@ export default function CartManager() {
     return `${year}-${month}-${day}`;
   };
 
-  // 1. Chuyển Date sang chuỗi YYYY-MM-DD (để hiển thị vào ô ngày)
   const formatDateForWeb = (date: Date) => {
     const d = new Date(date);
     d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
     return d.toISOString().split('T')[0];
   };
 
-  // 2. Chuyển Date sang chuỗi HH:mm (để hiển thị vào ô giờ)
   const formatTimeForWeb = (date: Date) => {
     const d = new Date(date);
     const hh = d.getHours().toString().padStart(2, '0');
@@ -82,29 +78,24 @@ export default function CartManager() {
     return `${hh}:${mm}`;
   };
 
-  // 3. Xử lý khi chọn Ngày trên Web
   const handleWebDateChange = (e: any) => {
     const newDateStr = e.target.value;
     if (!newDateStr) return;
-
     const newDate = new Date(date);
     const [year, month, day] = newDateStr.split('-').map(Number);
     newDate.setFullYear(year, month - 1, day);
     setDate(newDate);
   };
 
-  // 4. Xử lý khi chọn Giờ trên Web
   const handleWebTimeChange = (e: any) => {
     const newTimeStr = e.target.value;
     if (!newTimeStr) return;
-
     const [hours, minutes] = newTimeStr.split(':').map(Number);
     const newDate = new Date(date);
     newDate.setHours(hours);
     newDate.setMinutes(minutes);
     setDate(newDate);
   };
-
 
   // 1. Hàm GET: Lấy danh sách cart
   const fetchCarts = async () => {
@@ -137,9 +128,11 @@ export default function CartManager() {
       const offset = date.getTimezoneOffset() * 60000;
       const localISOTime = (new Date(date.getTime() - offset)).toISOString().slice(0, 19);
 
+      // --- 2. CẬP NHẬT PAYLOAD ---
       const payload = {
         name: name,
         notify_at: localISOTime,
+        budget: parseFloat(budget) || 0, // Gửi budget lên server (nếu rỗng thì là 0)
       };
 
       const response = await fetch(`${API_URL}/cart`, {
@@ -151,9 +144,24 @@ export default function CartManager() {
       });
 
       if (response.ok) {
-        Alert.alert('Thành công', 'Đã tạo Cart mới!');
+        const newCartData = await response.json(); 
+        
+        // Hẹn giờ thông báo
+        if (newCartData.notify_at) {
+            await scheduleCartNotification(
+                newCartData.id, 
+                newCartData.name, 
+                newCartData.notify_at
+            );
+        }
+
+        Alert.alert('Thành công', 'Đã tạo Cart và hẹn giờ nhắc nhở!');
+        
+        // Reset form
         setName('');
+        setBudget(''); // Reset ô budget
         setDate(new Date());
+        
         fetchCarts();
       } else {
         Alert.alert('Thất bại', 'Server trả về lỗi');
@@ -164,7 +172,7 @@ export default function CartManager() {
     }
   };
 
-  // 3. Hàm DELETE: Xóa cart
+  // 3. Hàm DELETE
   const executeDelete = async (id: number) => {
     try {
       const response = await fetch(`${API_URL}/cart/${id}`, {
@@ -207,6 +215,10 @@ export default function CartManager() {
     fetchCarts();
   };
 
+  const formatCurrency = (amount: number) => {
+    return amount.toLocaleString('vi-VN', { style: 'currency', currency: 'VND' });
+  };
+
   const renderItem = ({ item }: { item: Cart }) => (
     <TouchableOpacity
       style={styles.card}
@@ -232,6 +244,13 @@ export default function CartManager() {
       </View>
 
       <View style={styles.cardBody}>
+        {/* Hiển thị budget nếu có */}
+        {item.budget > 0 && (
+             <Text style={styles.label}>
+                Ngân sách: <Text style={[styles.value, {color: '#007AFF'}]}>{formatCurrency(Number(item.budget))}</Text>
+             </Text>
+        )}
+
         <Text style={styles.label}>
           Thông báo: <Text style={styles.value}>{item.notify_at ? formatDateTime(item.notify_at) : 'Không có'}</Text>
         </Text>
@@ -246,7 +265,6 @@ export default function CartManager() {
         <Text style={styles.sectionTitle}>Tạo Cart Mới</Text>
 
         <Text style={styles.label}>Tên Cart:</Text>
-
         <TextInput
           style={styles.input}
           placeholder="Nhập tên Cart (VD: Mua đồ tết)"
@@ -254,13 +272,22 @@ export default function CartManager() {
           onChangeText={setName}
         />
 
-       
+        {/* --- 3. UI NHẬP NGÂN SÁCH --- */}
+        <Text style={styles.label}>Ngân sách dự kiến (VNĐ):</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="VD: 500000"
+          value={budget}
+          onChangeText={setBudget}
+          keyboardType="numeric"
+        />
+        {/* --------------------------- */}
+
         <Text style={styles.label}>Thời gian thông báo:</Text>
 
         {/* KHU VỰC CHỌN NGÀY GIỜ */}
         {Platform.OS === 'web' ? (
           <View style={{ flexDirection: 'row', gap: 20, marginBottom: 15 }}>
-            {/* CỘT CHỌN NGÀY */}
             <View>
               <Text style={styles.webLabel}>Ngày:</Text>
               {/* @ts-ignore */}
@@ -268,7 +295,7 @@ export default function CartManager() {
                 type: 'date',
                 value: formatDateForWeb(date),
                 onChange: handleWebDateChange,
-                min: getTodayString(), // <--- ĐÃ THÊM: KHÔNG CHO CHỌN NGÀY TRONG QUÁ KHỨ
+                min: getTodayString(),
                 style: {
                   padding: 10,
                   borderRadius: 5,
@@ -282,7 +309,6 @@ export default function CartManager() {
               })}
             </View>
 
-            {/* CỘT CHỌN GIỜ */}
             <View>
               <Text style={styles.webLabel}>Giờ:</Text>
               {/* @ts-ignore */}
@@ -304,7 +330,7 @@ export default function CartManager() {
             </View>
           </View>
         ) : (
-          /* HIỂN THỊ TRÊN MOBILE */
+          /* MOBILE */
           <>
             <View style={styles.dateTimeDisplay}>
               <Text style={styles.dateTimeText}>
@@ -322,7 +348,6 @@ export default function CartManager() {
               </TouchableOpacity>
             </View>
 
-            {/* Picker ẩn hiện cho Mobile */}
             {showPicker && (
               <DateTimePicker
                 testID="dateTimePicker"
@@ -331,11 +356,10 @@ export default function CartManager() {
                 is24Hour={true}
                 display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                 onChange={onChangeDate}
-                minimumDate={new Date()} // <--- ĐÃ THÊM: KHÔNG CHO CHỌN NGÀY TRONG QUÁ KHỨ
+                minimumDate={new Date()}
               />
             )}
 
-            {/* Nút Xong cho iOS */}
             {Platform.OS === 'ios' && showPicker && (
               <TouchableOpacity
                 style={[styles.button, { backgroundColor: '#f0f0f0', marginTop: 5, marginBottom: 10 }]}
@@ -369,7 +393,6 @@ export default function CartManager() {
           />
         )}
       </View>
-     
     </View>
   );
 }
@@ -539,5 +562,4 @@ const styles = StyleSheet.create({
     marginTop: 20,
     color: '#888',
   },
- 
 });

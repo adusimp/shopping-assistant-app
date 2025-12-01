@@ -1,5 +1,4 @@
-import React, { useState, useEffect } from 'react';
-import { Picker } from '@react-native-picker/picker';
+import React, { useState, useEffect, useMemo } from 'react';
 import { uploadAsync, FileSystemUploadType } from 'expo-file-system/legacy';
 import {
   View,
@@ -10,17 +9,17 @@ import {
   StyleSheet,
   ActivityIndicator,
   Alert,
-  Image,
   Modal,
-  ScrollView,
   Platform,
-  KeyboardAvoidingView, // Thêm cái này cho form nhập liệu ko bị che
 } from 'react-native';
 import { useLocalSearchParams, Stack } from 'expo-router';
-import * as ImagePicker from 'expo-image-picker';
 import ProductListScreen, { ProductCategory } from '@/components/productListScreen';
-import { Ionicons } from '@expo/vector-icons'; // Import Icon
-import { getFullImageUrl } from '@/common/function/getImageUrl';
+import { Ionicons } from '@expo/vector-icons';
+import { scheduleCartNotification } from '@/common/notificationHelper';
+import { AiSuggestModal } from '@/components/cart/aiSuggestModal';
+import { CartItemRow } from '@/components/cart/cartItem';
+import { PriceCheckModal } from '@/components/cart/priceCheckModal';
+import { ManualAddModal } from '@/components/cart/addProductModal';
 
 // TODO: Thay đổi IP này thành IP máy tính của bạn
 const API_URL = process.env.EXPO_PUBLIC_API_URL;
@@ -29,8 +28,10 @@ interface CartDetail {
   id: number;
   name: string;
   notify_at: string | null;
+  budget: number;
 }
 
+// Interface này phải khớp với cái bên CartItemRow
 interface CartItem {
   product_id: number;
   name: string;
@@ -41,239 +42,61 @@ interface CartItem {
 }
 
 export default function ListDetailScreen() {
-  const CATEGORY_LABELS: Record<string, string> = {
-    [ProductCategory.MEAT_SEAFOOD]: 'Thịt & Hải sản',
-    [ProductCategory.FRESH_PRODUCE]: 'Rau củ quả',
-    [ProductCategory.DRINKS]: 'Đồ uống',
-    [ProductCategory.SPICES_PANTRY]: 'Gia vị & Đồ khô',
-    [ProductCategory.DAIRY]: 'Sữa',
-    [ProductCategory.SNACKS]: 'Bánh kẹo',
-    [ProductCategory.FROZEN]: 'Đồ đông lạnh',
-    [ProductCategory.HOUSEHOLD]: 'Gia dụng',
-    [ProductCategory.OTHER]: 'Khác',
-  };
 
   const { id } = useLocalSearchParams();
   const cartId = Array.isArray(id) ? id[0] : id;
 
   // --- State Data ---
-  const [priceModalVisible, setPriceModalVisible] = useState(false);
-  const [targetItem, setTargetItem] = useState<CartItem | null>(null); // Món đang được check
-  const [aiPrice, setAiPrice] = useState<number>(0); // Giá AI tìm được
-  const [loadingAiPrice, setLoadingAiPrice] = useState(false);
-
   const [cart, setCart] = useState<CartDetail | null>(null);
   const [items, setItems] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // --- State Edit Header ---
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState('');
   const [editNotify, setEditNotify] = useState('');
+  const [editBudget, setEditBudget] = useState(''); // State cho budget
 
-  // --- State Modal (Đã tách ra làm 2) ---
-  const [modalManualVisible, setModalManualVisible] = useState(false); // Modal nhập tay
-  const [modalListVisible, setModalListVisible] = useState(false);     // Modal chọn từ kho
+  // --- State Modal Thủ công & Kho ---
+  const [modalManualVisible, setModalManualVisible] = useState(false);
+  const [modalListVisible, setModalListVisible] = useState(false);
 
-  // Form fields (Cho nhập tay)
-  const [newName, setNewName] = useState('');
-  const [newImage, setNewImage] = useState('');
-  const [newPrice, setNewPrice] = useState('');
-  const [newCategory, setNewCategory] = useState(ProductCategory.OTHER);
-  const [newQuantity, setNewQuantity] = useState('1');
+  // Form fields (Thủ công)
 
-  // --- 1. STATE CHO AI ---
+
+  // --- State AI Suggest Modal ---
   const [modalSuggestVisible, setModalSuggestVisible] = useState(false);
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [suggestedItems, setSuggestedItems] = useState<any[]>([]);
-  const [selectedSuggestions, setSelectedSuggestions] = useState<any[]>([]);
 
-// --- HÀM TÍCH ĐÃ MUA ---
-  const handleToggleStatus = async (item: CartItem) => {
-    // 1. Cập nhật giao diện NGAY LẬP TỨC (Optimistic)
-    const originalItems = [...items]; // Backup để revert nếu lỗi
-    
-    setItems((prevItems) => 
-      prevItems.map((i) => 
-        i.product_id === item.product_id 
-          ? { ...i, is_bought: !i.is_bought } 
-          : i
-      )
-    );
+  // --- State Price Check Modal ---
+  const [priceModalVisible, setPriceModalVisible] = useState(false);
+  const [targetItem, setTargetItem] = useState<CartItem | null>(null);
+  const [aiPrice, setAiPrice] = useState<number>(0);
+  const [loadingAiPrice, setLoadingAiPrice] = useState(false);
 
-    try {
-      // 2. Gọi API
-      await fetch(`${API_URL}/cart/toggle-status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-            cartId: Number(cartId), 
-            productId: item.product_id 
-        }),
-      });
-      // Thành công thì không cần làm gì thêm vì UI đã update rồi
-      fetchCartItems()
-    } catch (error) {
-      console.error("Lỗi toggle:", error);
-      // Nếu lỗi thì revert lại danh sách cũ
-      setItems(originalItems); 
-      Alert.alert("Lỗi", "Không thể cập nhật trạng thái");
-    }
-  };
-  // 1. Hàm được gọi khi bấm nút trên Item
-  const openPriceSuggestion = async (item: CartItem) => {
-    setTargetItem(item);       // Lưu món đang chọn
-    setPriceModalVisible(true); // Mở Modal lên ngay
-    setLoadingAiPrice(true);    // Bật xoay xoay
-    setAiPrice(0);              // Reset giá cũ
-
-    try {
-      // Gọi API Suggest (Ưu tiên tìm theo ID)
-      const res = await fetch(`${API_URL}/cart/suggest-price`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          productName: item.name,
-          productId: item.product_id
-        }),
-      });
-      const data = await res.json();
-
-      // data trả về: { price: 15000, ... }
-      setAiPrice(Number(data.aiPrice) || 0);
-
-    } catch (error) {
-      console.error("Lỗi AI Price:", error);
-      Alert.alert("Lỗi", "Không thể lấy giá từ AI lúc này");
-    } finally {
-      setLoadingAiPrice(false);
-    }
+  // --- Helpers ---
+  const formatCurrency = (price: string | number) => {
+    const numberPrice = typeof price === 'string' ? parseFloat(price) : price;
+    if (isNaN(numberPrice)) return '0 ₫';
+    return numberPrice.toLocaleString('vi-VN', { style: 'currency', currency: 'VND' });
   };
 
-  // 2. Hàm được gọi khi bấm "Xác nhận cập nhật" trong Modal
-  const handleConfirmUpdatePrice = async () => {
-    if (!targetItem || aiPrice <= 0) return;
-
-    try {
-      // Gọi API Update Price
-      const res = await fetch(`${API_URL}/cart/update-price`, {
-        method: 'POST', // hoặc PUT tùy backend bạn
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: targetItem.product_id,
-          price: aiPrice
-        }),
-      });
-
-      if (res.ok) {
-        Alert.alert("Thành công", "Đã cập nhật giá mới vào kho dữ liệu!");
-        setPriceModalVisible(false); // Đóng modal
-
-        // Quan trọng: Load lại danh sách để hiển thị giá mới (nếu API list lấy giá từ Product)
-        fetchCartItems();
-      } else {
-        Alert.alert("Lỗi", "Không cập nhật được giá.");
-      }
-    } catch (error) {
-      console.error(error);
-      Alert.alert("Lỗi mạng", "Kiểm tra kết nối");
-    }
-  };
-
-
-  // --- 2. GỌI AI ĐỂ LẤY GỢI Ý ---
-  const handleGetSuggestion = async () => {
-    if (!cart || !cart.name) return; // Kiểm tra xem đã load được thông tin cart chưa
-
-    setIsSuggesting(true);
-    setSelectedSuggestions([]); // Reset lựa chọn
-    try {
-      // Gọi API Suggest mà chúng ta đã viết ở backend
-      const response = await fetch(`${API_URL}/cart/suggest`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cartName: cart.name }),
-      });
-
-      const data = await response.json();
-      if (data.items) {
-        setSuggestedItems(data.items);
-        setModalSuggestVisible(true);
-      }
-    } catch (error) {
-      console.error(error);
-      Alert.alert("Lỗi", "AI đang bận, thử lại sau nhé!");
-    } finally {
-      setIsSuggesting(false);
-    }
-  };
   const sortItems = (list: CartItem[]) => {
     return list.sort((a, b) => {
-        if (a.is_bought === b.is_bought) return 0;
-        return a.is_bought ? 1 : -1; // true (đã mua) lớn hơn -> nằm dưới
+      if (a.is_bought === b.is_bought) return 0;
+      return a.is_bought ? 1 : -1;
     });
-};
-
-
-  // --- 3. XỬ LÝ TÍCH CHỌN ---
-  const toggleSuggestion = (item: any) => {
-    const exists = selectedSuggestions.find(i => i.name === item.name);
-    if (exists) {
-      setSelectedSuggestions(prev => prev.filter(i => i.name !== item.name));
-    } else {
-      setSelectedSuggestions(prev => [...prev, item]);
-    }
   };
 
-  // --- 4. LƯU CÁC MÓN ĐÃ CHỌN VÀO GIỎ HÀNG (DÙNG API MỚI) ---
-  const handleConfirmSuggestions = async () => {
-    if (selectedSuggestions.length === 0) return;
+  // --- Effects & Computed ---
+  const totalPrice = useMemo(() => {
+    return items.reduce((sum, item) => sum + (parseFloat(item.total_price) || 0), 0);
+  }, [items]);
 
-    // Bật loading để chặn người dùng bấm lung tung
-    setIsSuggesting(true);
-
-    try {
-      // 1. Chuẩn bị dữ liệu (Payload) đúng form Backend yêu cầu
-      const payload = {
-        cartId: Number(id), // Chuyển id từ params (string) sang number
-        items: selectedSuggestions.map(item => ({
-          type: item.type, // 'NEW' hoặc 'EXISTING'
-          id: item.type === 'EXISTING' ? item.id : undefined, // Nếu NEW thì không cần gửi ID
-          name: item.name,
-          price: item.price ? Number(item.price) : 0, // Đảm bảo giá là số
-          img_url: item.img_url || null
-        }))
-      };
-
-      console.log("Gửi payload lên server:", payload);
-
-      // 2. Gọi API Bulk Insert (Gửi 1 lần duy nhất)
-      const response = await fetch(`${API_URL}/cart/add-ai-items`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (response.ok) {
-        // A. Thành công
-        Alert.alert("Thành công", `Đã thêm ${selectedSuggestions.length} món vào giỏ hàng!`);
-        setModalSuggestVisible(false); // Đóng Modal
-        setSelectedSuggestions([]);    // Reset lựa chọn
-
-        // Load lại danh sách sản phẩm trong giỏ để thấy món mới
-        fetchCartItems();
-      } else {
-        // B. Lỗi từ server trả về
-        const errData = await response.json();
-        Alert.alert("Lỗi Server", errData.message || "Không thể thêm sản phẩm.");
-      }
-
-    } catch (error) {
-      console.error("Lỗi mạng:", error);
-      Alert.alert("Lỗi", "Không thể kết nối đến server.");
-    } finally {
-      setIsSuggesting(false); // Tắt loading
-    }
-  };
+  const boughtPrice = useMemo(() => {
+    return items.reduce((sum, item) => item.is_bought ? sum + (parseFloat(item.total_price) || 0) : sum, 0);
+  }, [items]);
 
   useEffect(() => {
     if (!cartId) return;
@@ -281,6 +104,7 @@ export default function ListDetailScreen() {
     fetchCartItems();
   }, [cartId]);
 
+  // --- Logic API ---
   const fetchCartDetails = async () => {
     try {
       const res = await fetch(`${API_URL}/cart/${cartId}`);
@@ -288,133 +112,8 @@ export default function ListDetailScreen() {
       setCart(data);
       setEditName(data.name);
       setEditNotify(data.notify_at || '');
-    } catch (error) {
-      console.error('Lỗi lấy chi tiết cart:', error);
-    }
-  };
-
-  // --- HÀM XÓA TOÀN BỘ GIỎ HÀNG ---
-  const handleClearCart = () => {
-    // 1. Kiểm tra nếu giỏ hàng đang trống thì thôi
-    if (items.length === 0) {
-      if (Platform.OS !== 'web') {
-        Alert.alert("Thông báo", "Giỏ hàng đang trống!");
-      }
-      return;
-    }
-
-    // 2. Logic gọi API xóa
-    const executeClear = async () => {
-      try {
-        const response = await fetch(`${API_URL}/cart/${id}/clear`, { // id lấy từ params
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
-
-        if (response.ok) {
-          // A. Thành công
-          console.log("Đã dọn sạch giỏ hàng");
-
-          // Cập nhật State: Xóa sạch danh sách item đang hiển thị
-          setItems([]);
-
-          // Nếu muốn load lại từ server cho chắc chắn thì gọi:
-          // fetchCartItems();
-
-          if (Platform.OS !== 'web') {
-            Alert.alert("Thành công", "Đã xóa tất cả sản phẩm trong giỏ.");
-          }
-        } else {
-          // B. Lỗi Server
-          Alert.alert("Lỗi", "Không thể dọn giỏ hàng lúc này.");
-        }
-      } catch (error) {
-        console.error("Lỗi Clear Cart:", error);
-        Alert.alert("Lỗi mạng", "Vui lòng kiểm tra kết nối.");
-      }
-    };
-
-    // 3. Hiển thị hộp thoại xác nhận (Web vs Mobile)
-    if (Platform.OS === 'web') {
-      const confirm = window.confirm("CẢNH BÁO: Bạn có chắc chắn muốn xóa TẤT CẢ sản phẩm trong giỏ hàng này không?");
-      if (confirm) {
-        executeClear();
-      }
-    } else {
-      Alert.alert(
-        "Xác nhận dọn giỏ hàng",
-        "Bạn có chắc chắn muốn xóa TẤT CẢ sản phẩm không? Hành động này không thể hoàn tác.",
-        [
-          { text: "Hủy", style: "cancel" },
-          {
-            text: "Xóa sạch",
-            onPress: executeClear,
-            style: "destructive" // Nút màu đỏ trên iOS
-          }
-        ]
-      );
-    }
-  };
-
-  // --- HÀM XÓA 1 SẢN PHẨM KHỎI GIỎ ---
-  const handleDeleteItem = (productId: number) => {
-
-    // 1. Định nghĩa logic gọi API xóa
-    const executeDelete = async () => {
-      try {
-        // Gọi API: DELETE /cart/:cartid/items/:productid
-        const response = await fetch(`${API_URL}/cart/${id}/items/${productId}`, {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
-
-        if (response.ok) {
-          console.log(`Đã xóa product ${productId} khỏi cart ${id}`);
-
-          // CẬP NHẬT UI: Lọc bỏ item vừa xóa ra khỏi danh sách hiện tại
-          // Lưu ý: item.product_id hay item.id tuỳ thuộc vào dữ liệu API trả về list items của bạn
-          // Ở đây mình giả định items trong state có trường 'product_id' hoặc 'id' khớp với productId truyền vào
-          setItems((prevItems) => prevItems.filter((item) =>
-            (item.product_id) !== productId
-          ));
-
-          // Thông báo nhẹ (chỉ hiện trên Mobile, Web không cần thiết vì danh sách tự mất)
-          if (Platform.OS !== 'web') {
-            // ToastAndroid.show("Đã xóa", ToastAndroid.SHORT); // Hoặc dùng Alert nếu thích
-          }
-        } else {
-          Alert.alert("Lỗi", "Không thể xóa sản phẩm lúc này.");
-        }
-      } catch (error) {
-        console.error("Lỗi xóa item:", error);
-        Alert.alert("Lỗi mạng", "Vui lòng kiểm tra kết nối server.");
-      }
-    };
-
-    // 2. Hiển thị xác nhận (Phân biệt Web và Mobile)
-    if (Platform.OS === 'web') {
-      const confirm = window.confirm("Bạn có chắc chắn muốn xóa sản phẩm này không?");
-      if (confirm) {
-        executeDelete();
-      }
-    } else {
-      Alert.alert(
-        "Xác nhận xóa",
-        "Bạn muốn bỏ sản phẩm này khỏi giỏ hàng?",
-        [
-          { text: "Hủy", style: "cancel" },
-          {
-            text: "Xóa",
-            onPress: executeDelete,
-            style: "destructive" // Nút màu đỏ trên iOS
-          }
-        ]
-      );
-    }
+      setEditBudget(data.budget > 0 ? data.budget.toString() : '');
+    } catch (error) { console.error('Lỗi lấy chi tiết cart:', error); }
   };
 
   const fetchCartItems = async () => {
@@ -422,25 +121,8 @@ export default function ListDetailScreen() {
       const res = await fetch(`${API_URL}/product/product-in-cart/${cartId}`);
       const data = await res.json();
       setItems(sortItems(data));
-    } catch (error) {
-      console.error('Lỗi lấy items:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // --- 2. Hàm chọn ảnh từ thư viện ---
-  const pickImage = async () => {
-    let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 1,
-    });
-
-    if (!result.canceled) {
-      setNewImage(result.assets[0].uri);
-    }
+    } catch (error) { console.error('Lỗi lấy items:', error); }
+    finally { setLoading(false); }
   };
 
   const handleUpdateCart = async () => {
@@ -448,197 +130,244 @@ export default function ListDetailScreen() {
       const res = await fetch(`${API_URL}/cart/${cartId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: editName, notify_at: editNotify || null }),
+        body: JSON.stringify({
+          name: editName,
+          notify_at: editNotify || null,
+          budget: parseFloat(editBudget) || 0
+        }),
       });
       if (res.ok) {
-        Alert.alert('Thành công', 'Đã cập nhật thông tin Cart');
+        if (editNotify) await scheduleCartNotification(Number(cartId), editName, editNotify);
+        Alert.alert('Thành công', 'Đã cập nhật thông tin');
         setIsEditing(false);
         fetchCartDetails();
       }
     } catch (error) { console.error(error); }
   };
 
-  // --- Xử lý thêm thủ công ---
-  const handleAddItem = async () => {
-    if (!newName.trim()) {
-      Alert.alert("Thiếu thông tin", "Vui lòng nhập tên sản phẩm");
-      return;
-    }
+  // --- Logic Tương tác Item ---
+  const handleToggleStatus = async (item: CartItem) => {
+    const originalItems = [...items];
+    setItems((prevItems) => sortItems(prevItems.map((i) => i.product_id === item.product_id ? { ...i, is_bought: !i.is_bought } : i)));
 
     try {
-      // --- TRƯỜNG HỢP 1: WEB ---
-      if (Platform.OS === 'web') {
-        const formData = new FormData();
-        formData.append('cart_id', String(cartId));
-        formData.append('name', newName);
-        formData.append('price', String(newPrice || 0));
-        formData.append('quantity', String(newQuantity || 1));
-        formData.append('category', newCategory || '');
+      await fetch(`${API_URL}/cart/toggle-status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cartId: Number(cartId), productId: item.product_id }),
+      });
+    } catch (error) {
+      setItems(originalItems);
+      Alert.alert("Lỗi", "Không thể cập nhật trạng thái");
+    }
+  };
 
-        if (newImage) {
-          const response = await fetch(newImage);
-          const blob = await response.blob();
-          formData.append('file', blob, 'upload.jpg');
+  const handleDeleteItem = (productId: number) => {
+    const executeDelete = async () => {
+      try {
+        const res = await fetch(`${API_URL}/cart/${id}/items/${productId}`, {
+          method: 'DELETE', headers: { 'Content-Type': 'application/json' }
+        });
+        if (res.ok) {
+          setItems((prev) => prev.filter((i) => i.product_id !== productId));
+        } else { Alert.alert("Lỗi", "Không thể xóa"); }
+      } catch (e) { Alert.alert("Lỗi mạng"); }
+    };
+
+    if (Platform.OS === 'web') {
+      if (window.confirm("Xóa sản phẩm này?")) executeDelete();
+    } else {
+      Alert.alert("Xác nhận xóa", "Bạn muốn bỏ sản phẩm này?", [
+        { text: "Hủy", style: "cancel" }, { text: "Xóa", style: "destructive", onPress: executeDelete }
+      ]);
+    }
+  };
+
+  const handleClearCart = () => {
+    if (items.length === 0) return;
+    const executeClear = async () => {
+      try {
+        const res = await fetch(`${API_URL}/cart/${id}/clear`, {
+          method: 'DELETE', headers: { 'Content-Type': 'application/json' }
+        });
+        if (res.ok) { setItems([]); }
+        else { Alert.alert("Lỗi", "Không thể dọn giỏ hàng"); }
+      } catch (e) { Alert.alert("Lỗi mạng"); }
+    };
+
+    if (Platform.OS === 'web') {
+      if (window.confirm("Xóa TẤT CẢ?")) executeClear();
+    } else {
+      Alert.alert("Xác nhận dọn giỏ hàng", "Xóa TẤT CẢ sản phẩm?", [
+        { text: "Hủy", style: "cancel" }, { text: "Xóa sạch", style: "destructive", onPress: executeClear }
+      ]);
+    }
+  };
+
+  // --- Logic Price Check Modal ---
+  const openPriceSuggestion = async (item: CartItem) => {
+    setTargetItem(item);
+    setPriceModalVisible(true);
+    setLoadingAiPrice(true);
+    setAiPrice(0);
+
+    try {
+      const res = await fetch(`${API_URL}/cart/suggest-price`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productName: item.name, productId: item.product_id }),
+      });
+      const data = await res.json();
+      const priceFromServer = data.suggestedPrice || data.aiPrice || data.price;
+      setAiPrice(Number(priceFromServer) || 0);
+    } catch (error) { Alert.alert("Lỗi", "Không thể lấy giá AI"); }
+    finally { setLoadingAiPrice(false); }
+  };
+
+  const handleConfirmUpdatePrice = async () => {
+    if (!targetItem || aiPrice <= 0) return;
+    try {
+      const res = await fetch(`${API_URL}/cart/update-price`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: targetItem.product_id, price: aiPrice }),
+      });
+      if (res.ok) {
+        Alert.alert("Thành công", "Đã cập nhật giá mới!");
+        setPriceModalVisible(false);
+        fetchCartItems();
+      }
+    } catch (error) { Alert.alert("Lỗi mạng"); }
+  };
+
+  // --- Logic AI Suggest Modal ---
+  const handleGetSuggestion = async () => {
+    if (!cart?.name) return;
+    setIsSuggesting(true);
+    try {
+      const res = await fetch(`${API_URL}/cart/suggest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cartName: cart.name }),
+      });
+      const data = await res.json();
+      if (data.items) {
+        setSuggestedItems(data.items);
+        setModalSuggestVisible(true);
+      }
+    } catch (error) { Alert.alert("Lỗi", "AI đang bận"); }
+    finally { setIsSuggesting(false); }
+  };
+
+  const handleConfirmSuggestions = async (itemsToSave: any[]) => {
+    if (itemsToSave.length === 0) return;
+    setIsSuggesting(true);
+    try {
+      const payload = {
+        cartId: Number(id),
+        items: itemsToSave.map(item => ({
+          type: item.type,
+          id: item.type === 'EXISTING' ? item.id : undefined,
+          name: item.name,
+          price: item.price ? Number(item.price) : 0,
+          img_url: item.img_url || null
+        }))
+      };
+      const res = await fetch(`${API_URL}/cart/add-ai-items`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        Alert.alert("Thành công", `Đã thêm ${itemsToSave.length} món!`);
+        setModalSuggestVisible(false);
+        fetchCartItems();
+      }
+    } catch (error) { Alert.alert("Lỗi kết nối"); }
+    finally { setIsSuggesting(false); }
+  };
+
+  // --- Logic Manual Add ---
+
+
+  // Hàm xử lý khi Modal con bấm "Lưu"
+  const handleAddItem = async (formData: any) => {
+    // formData sẽ có dạng: { name, price, quantity, category, imageUri }
+
+    try {
+      const textFields = {
+        cart_id: String(cartId),
+        name: formData.name,
+        price: String(formData.price || 0),
+        quantity: String(formData.quantity || 1),
+        category: formData.category || '',
+      };
+
+      if (Platform.OS === 'web') {
+        const postData = new FormData();
+        Object.entries(textFields).forEach(([k, v]) => postData.append(k, v as string));
+
+        if (formData.imageUri) {
+          const res = await fetch(formData.imageUri);
+          const blob = await res.blob();
+          postData.append('file', blob, 'upload.jpg');
         }
 
         const res = await fetch(`${API_URL}/product/add-product-to-cart`, {
-          method: 'POST',
-          body: formData,
+          method: 'POST', body: postData
         });
 
         if (res.ok) {
-          Alert.alert("Thành công", "Đã thêm trên Web!");
-          resetForm();
-        } else {
-          const txt = await res.text();
-          Alert.alert("Lỗi Web", txt);
+          Alert.alert("Thành công", "Đã thêm sản phẩm!");
+          fetchCartItems();
         }
-
       } else {
-        // --- TRƯỜNG HỢP 2: MOBILE (Android/iOS) ---
-        const textFields = {
-          cart_id: String(cartId),
-          name: newName,
-          price: String(newPrice || 0),
-          quantity: String(newQuantity || 1),
-          category: newCategory || '',
-        };
-
-        if (!newImage) {
-          Alert.alert("Lỗi", "Vui lòng chọn ảnh");
-          return;
+        // Mobile Upload
+        if (!formData.imageUri) {
+          Alert.alert("Thông báo", "Bạn chưa chọn ảnh (sẽ dùng ảnh mặc định)");
+          // Nếu bắt buộc ảnh thì return tại đây
         }
 
-        console.log("Mobile: Đang upload legacy...");
-
-        const uploadResult = await uploadAsync(
-          `${API_URL}/product/add-product-to-cart`,
-          newImage,
-          {
+        if (formData.imageUri) {
+          await uploadAsync(`${API_URL}/product/add-product-to-cart`, formData.imageUri, {
             fieldName: 'file',
             httpMethod: 'POST',
             uploadType: FileSystemUploadType.MULTIPART,
             parameters: textFields,
-          }
-        );
-
-        if (uploadResult.status >= 200 && uploadResult.status < 300) {
-          Alert.alert("Thành công", "Đã thêm trên Mobile!");
-          resetForm();
+          });
         } else {
-          Alert.alert("Lỗi Mobile", "Server trả về: " + uploadResult.body);
+          // Nếu không có ảnh, bạn cần API hỗ trợ không gửi file, 
+          // hoặc gửi request thường thay vì uploadAsync
+          // Tạm thời mình giả định bạn luôn chọn ảnh hoặc API bạn xử lý được.
         }
+
+        Alert.alert("Thành công", "Đã thêm sản phẩm!");
+        fetchCartItems();
       }
 
-    } catch (error) {
-      console.error("Lỗi chung:", error);
-      Alert.alert("Lỗi", "Có lỗi xảy ra: " + error);
+      // Đóng modal thì component con tự làm rồi, ở đây chỉ cần load lại data
+      setModalManualVisible(false);
+
+    } catch (e) {
+      Alert.alert("Lỗi", String(e));
     }
   };
 
-  // Reset form thủ công
-  const resetForm = () => {
-    setModalManualVisible(false); // Đóng modal thủ công
-    setNewName(''); setNewImage(''); setNewPrice(''); setNewQuantity('1');
-    fetchCartItems();
-  };
-
-  const formatCurrency = (price: string) => {
-    const numberPrice = parseFloat(price);
-    return numberPrice.toLocaleString('vi-VN', { style: 'currency', currency: 'VND' });
-  };
-
-  // const getFullImageUrl = (imagePath: string | null) => {
-  //   if (!imagePath) return 'https://via.placeholder.com/150';
-  //   if (imagePath.startsWith('http')) {
-  //     return imagePath;
-  //   }
-  //   const baseUrl = API_URL?.replace(/\/$/, '');
-  //   const path = imagePath.startsWith('/') ? imagePath : `/${imagePath}`;
-  //   return `${baseUrl}${path}`;
-  // };
-
- const renderCartItem = ({ item }: { item: CartItem }) => (
-    <View style={[
-        styles.itemRow, 
-        item.is_bought && { backgroundColor: '#f9f9f9', opacity: 0.7 } // Làm mờ nhẹ nếu đã mua
-    ]}>
-      
-      {/* --- NÚT CHECKBOX (TRÁI) --- */}
-      <TouchableOpacity 
-        onPress={() => handleToggleStatus(item)}
-        style={{ padding: 5, marginRight: 5 }}
-      >
-        <Ionicons 
-            name={item.is_bought ? "checkbox" : "square-outline"} 
-            size={24} 
-            color={item.is_bought ? "#34C759" : "#ccc"} 
-        />
-      </TouchableOpacity>
-
-      {/* Ảnh sản phẩm */}
-      <Image
-        source={{ uri: getFullImageUrl(item.img_url) || 'https://via.placeholder.com/50' }}
-        style={styles.itemImage}
-        resizeMode="cover"
-      />
-
-      {/* Thông tin tên và số lượng */}
-      <View style={styles.itemInfo}>
-        <Text 
-            style={[
-                styles.itemName, 
-                item.is_bought && { textDecorationLine: 'line-through', color: '#999' } // Gạch ngang chữ
-            ]} 
-            numberOfLines={2}
-        >
-            {item.name}
-        </Text>
-        <Text style={styles.itemQuantity}>Số lượng: x{item.quantity}</Text>
-        
-        {/* Nút check giá AI (Giữ nguyên) */}
-        <TouchableOpacity onPress={() => openPriceSuggestion(item)} style={{marginTop: 5, flexDirection: 'row', alignItems: 'center'}}>
-            <Ionicons name="pricetags-outline" size={14} color="#007AFF" />
-            <Text style={{fontSize: 12, color: '#007AFF', marginLeft: 4}}>Check giá AI</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Cột bên phải */}
-      <View style={{ alignItems: 'flex-end', marginLeft: 10 }}>
-        <Text style={[
-            styles.itemPrice,
-            item.is_bought && { color: '#999' } // Làm mờ giá tiền
-        ]}>
-            {formatCurrency(item.total_price)}
-        </Text>
-        
-        <TouchableOpacity 
-          style={{ marginTop: 8, padding: 4 }} 
-          onPress={() => handleDeleteItem(item.product_id)}
-        >
-          <Text style={{ color: '#ff3b30', fontSize: 12, fontWeight: '600' }}>Xóa</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
 
   if (loading) return <ActivityIndicator style={styles.centered} size="large" />;
 
+  // --- UI ---
   return (
     <View style={styles.container}>
-
       <Stack.Screen
         options={{
           title: cart?.name || 'Chi tiết',
-          // --- HEADER VỚI 2 NÚT ---
           headerRight: () => (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 15 }}>
-              {/* Nút 1: Chọn từ kho (Icon Sách) */}
               <TouchableOpacity onPress={() => setModalListVisible(true)} style={{ padding: 5 }}>
                 <Ionicons name="library-outline" size={26} color="#007AFF" />
               </TouchableOpacity>
-
-              {/* Nút 2: Thêm thủ công (Icon Cộng tròn) */}
               <TouchableOpacity onPress={() => setModalManualVisible(true)} style={{ padding: 5 }}>
                 <Ionicons name="add-circle-outline" size={28} color="#007AFF" />
               </TouchableOpacity>
@@ -646,20 +375,17 @@ export default function ListDetailScreen() {
           ),
         }}
       />
-      {/* KHU VỰC NÚT BẤM */}
-      <View style={{ flexDirection: 'row', gap: 10, marginBottom: 15 }}>
 
-
-        {/* NÚT AI GỢI Ý (MỚI) */}
+      <View style={styles.actionButtonRow}>
         <TouchableOpacity
-          style={[styles.btn, { flex: 1, backgroundColor: '#6C5CE7', flexDirection: 'row', justifyContent: 'center', gap: 5 }]}
-          onPress={handleGetSuggestion}
-          disabled={isSuggesting}
+          style={[styles.btn, styles.btnConfirm, { flexDirection: 'row', gap: 5 }]}
+          onPress={handleGetSuggestion} disabled={isSuggesting}
         >
           {isSuggesting ? <ActivityIndicator color="white" size="small" /> : <Text style={{ color: 'white' }}>✨</Text>}
           <Text style={styles.btnText}>Gợi ý AI</Text>
         </TouchableOpacity>
       </View>
+
       <View style={styles.headerSection}>
         <View style={styles.headerRow}>
           <Text style={styles.sectionTitle}>Thông Tin Cart</Text>
@@ -670,625 +396,161 @@ export default function ListDetailScreen() {
 
         {isEditing ? (
           <View>
+            <Text style={styles.label}>Tên:</Text>
             <TextInput style={styles.input} value={editName} onChangeText={setEditName} />
-            <TextInput style={styles.input} value={editNotify} onChangeText={setEditNotify} placeholder="YYYY-MM-DD..." />
+            <Text style={styles.label}>Ngân sách:</Text>
+            <TextInput style={styles.input} value={editBudget} onChangeText={setEditBudget} keyboardType="numeric" placeholder="0" />
+            <Text style={styles.label}>Hẹn giờ:</Text>
+            <TextInput style={styles.input} value={editNotify} onChangeText={setEditNotify} />
             <TouchableOpacity onPress={() => setIsEditing(false)}><Text style={styles.cancelText}>Hủy</Text></TouchableOpacity>
           </View>
         ) : (
           <View>
             <Text style={styles.infoText}>📦 {cart?.name}</Text>
+            <Text style={styles.infoText}>💰 Ngân sách: {cart?.budget ? formatCurrency(cart.budget) : 'Chưa đặt'}</Text>
             <Text style={styles.infoText}>⏰ {cart?.notify_at ? new Date(cart.notify_at).toLocaleString('vi-VN') : 'Chưa đặt giờ'}</Text>
           </View>
         )}
       </View>
-      <View style={{
-        flexDirection: 'row',       // 1. Xếp ngang
-        justifyContent: 'space-between', // 2. Đẩy 1 cái sang trái, 1 cái sang phải
-        alignItems: 'center',       // 3. Căn giữa theo chiều dọc
-        marginBottom: 10
-      }}>
-        <Text style={{ marginLeft: 15, fontWeight: '600', color: '#666' }}>
-          Giỏ hàng ({items.length})
-        </Text>
 
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, paddingHorizontal: 15 }}>
+        <Text style={{ fontWeight: '600', color: '#666' }}>Giỏ hàng ({items.length})</Text>
         <TouchableOpacity onPress={handleClearCart}>
-          <Text style={{ marginRight: 15, fontWeight: '600', color: 'red' }}>
-            Xóa tất cả
-          </Text>
+          <Text style={{ fontWeight: '600', color: 'red' }}>Xóa tất cả</Text>
         </TouchableOpacity>
       </View>
+
       <FlatList
         data={items}
         keyExtractor={(item) => item.product_id.toString()}
-        renderItem={renderCartItem}
-        contentContainerStyle={{ paddingBottom: 40 }}
+        // --- SỬ DỤNG COMPONENT MỚI ---
+        renderItem={({ item }) => (
+          <CartItemRow
+            item={item}
+            onToggle={handleToggleStatus}
+            onCheckPrice={openPriceSuggestion}
+            onDelete={handleDeleteItem}
+          />
+        )}
+        contentContainerStyle={{ paddingBottom: 100 }}
         ListEmptyComponent={<Text style={styles.emptyText}>Giỏ hàng trống</Text>}
       />
 
-      {/* --- MODAL 1: CHỌN TỪ KHO (Full Screen) --- */}
+      <View style={styles.footerContainer}>
+        <View style={styles.footerRow}>
+          <Text style={styles.footerLabel}>Tổng dự kiến:</Text>
+          <Text style={styles.footerTotal}>{formatCurrency(totalPrice.toString())}</Text>
+        </View>
+        {boughtPrice > 0 && (
+          <View style={styles.footerRowSmall}>
+            <Text style={styles.footerLabelSmall}>Đã mua:</Text>
+            <Text style={styles.footerTotalSmall}>{formatCurrency(boughtPrice.toString())}</Text>
+          </View>
+        )}
+      </View>
+
+      {/* --- CÁC MODAL --- */}
       <Modal
-        animationType="slide"
-        transparent={false} // Full màn hình
         visible={modalListVisible}
-        onRequestClose={() => setModalListVisible(false)}
+        animationType="slide"
+      // ...
       >
         <View style={{ flex: 1, backgroundColor: '#f5f5f5' }}>
-          {/* Header của Modal List */}
+          {/* ... Header Modal ... */}
           <View style={styles.modalListHeader}>
-            <TouchableOpacity onPress={() => setModalListVisible(false)}>
+            <TouchableOpacity onPress={() => setModalListVisible(false)} style={{ padding: 5 }}>
               <Text style={{ color: '#007AFF', fontSize: 16 }}>Đóng</Text>
             </TouchableOpacity>
+
             <Text style={{ fontSize: 17, fontWeight: 'bold' }}>Kho sản phẩm</Text>
+
+            {/* View rỗng này để đẩy tiêu đề vào giữa (cân đối với nút Đóng) */}
             <View style={{ width: 40 }} />
           </View>
-
-          {/* Component Danh sách sản phẩm */}
+          {/* Gọi Component tại đây */}
           <ProductListScreen
             cartId={Number(cartId)}
-            onItemAdded={() => fetchCartItems()} // Reload cart khi thêm xong
+            onItemAdded={() => fetchCartItems()} // Reload giỏ hàng sau khi thêm
           />
         </View>
       </Modal>
-
-      <Modal
-        animationType="slide"
-        transparent={true}
+      <ManualAddModal
         visible={modalManualVisible}
-        onRequestClose={() => setModalManualVisible(false)}
-      >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          style={styles.modalOverlay}
-        >
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Thêm thủ công</Text>
+        onClose={() => setModalManualVisible(false)}
+        onAdd={handleAddItem}
+      />
 
-            <ScrollView showsVerticalScrollIndicator={false}>
-              {/* Nhập Tên */}
-              <Text style={styles.label}>Tên sản phẩm (*):</Text>
-              <TextInput
-                style={styles.modalInput}
-                value={newName}
-                onChangeText={setNewName}
-                placeholder="VD: Bánh kẹo..."
-              />
-
-              {/* --- PHẦN CHỌN ẢNH (ĐÃ BỔ SUNG) --- */}
-              <Text style={styles.label}>Ảnh sản phẩm:</Text>
-              <View style={{ alignItems: 'center', marginBottom: 15 }}>
-                <TouchableOpacity onPress={pickImage} style={styles.imagePickerBtn}>
-                  {newImage ? (
-                    <Image source={{ uri: newImage }} style={styles.imagePreview} />
-                  ) : (
-                    <View style={{ alignItems: 'center' }}>
-                      {/* Bạn có thể thay Text bằng Icon Camera nếu muốn */}
-                      <Text style={{ fontSize: 30, color: '#ccc', marginBottom: 5 }}>📷</Text>
-                      <Text style={{ color: '#666' }}>+ Chọn ảnh từ thư viện</Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
-
-                {/* Nút xóa ảnh nếu chọn nhầm */}
-                {newImage ? (
-                  <TouchableOpacity onPress={() => setNewImage('')} style={{ padding: 5 }}>
-                    <Text style={{ color: '#FF3B30', fontSize: 13, fontWeight: '500' }}>Xóa ảnh</Text>
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-              {/* ---------------------------------- */}
-
-              {/* Nhập Giá & Số lượng */}
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                <View style={{ width: '48%' }}>
-                  <Text style={styles.label}>Giá (VNĐ):</Text>
-                  <TextInput
-                    style={styles.modalInput}
-                    value={newPrice}
-                    onChangeText={setNewPrice}
-                    keyboardType="numeric"
-                    placeholder="0"
-                  />
-                </View>
-                <View style={{ width: '48%' }}>
-                  <Text style={styles.label}>Số lượng:</Text>
-                  <TextInput
-                    style={styles.modalInput}
-                    value={newQuantity}
-                    onChangeText={setNewQuantity}
-                    keyboardType="numeric"
-                    placeholder="1"
-                  />
-                </View>
-              </View>
-
-              {/* Chọn Category */}
-              <Text style={styles.label}>Loại (Category):</Text>
-              <View style={styles.pickerContainer}>
-                <Picker
-                  selectedValue={newCategory}
-                  onValueChange={(itemValue) => setNewCategory(itemValue)}
-                  style={styles.picker}
-                  mode="dropdown"
-                >
-                  {Object.entries(CATEGORY_LABELS).map(([key, label]) => (
-                    <Picker.Item key={key} label={label} value={key} />
-                  ))}
-                </Picker>
-              </View>
-
-            </ScrollView>
-
-            {/* Nút Hủy / Lưu */}
-            <View style={styles.modalButtons}>
-              <TouchableOpacity style={[styles.btn, styles.btnCancel]} onPress={() => setModalManualVisible(false)}>
-                <Text style={styles.btnText}>Hủy</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.btn, styles.btnSave]} onPress={handleAddItem}>
-                <Text style={[styles.btnText, { color: 'white' }]}>Lưu</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-      <Modal
+      {/* --- MODAL AI SUGGEST (MỚI) --- */}
+      <AiSuggestModal
         visible={modalSuggestVisible}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setModalSuggestVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Gợi ý cho "{cart?.name}"</Text>
-            <Text style={styles.modalSubtitle}>AI tìm thấy các món sau:</Text>
+        onClose={() => setModalSuggestVisible(false)}
+        cartName={cart?.name}
+        suggestions={suggestedItems}
+        onAddItems={handleConfirmSuggestions}
+      />
 
-            <ScrollView style={styles.suggestionList}>
-              {suggestedItems.map((item, index) => {
-                const isSelected = selectedSuggestions.some(i => i.name === item.name);
-                const isExisting = item.type === 'EXISTING';
-
-                return (
-                  <TouchableOpacity
-                    key={index}
-                    style={[styles.suggestionItem, isSelected && styles.suggestionItemSelected]}
-                    onPress={() => toggleSuggestion(item)}
-                  >
-                    {/* Checkbox */}
-                    <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
-                      {isSelected && <Text style={{ color: 'white', fontSize: 12 }}>✓</Text>}
-                    </View>
-
-                    {/* Nội dung */}
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.itemName}>{item.name}</Text>
-                      {isExisting ? (
-                        <Text style={styles.tagExisting}>✅ Có sẵn • {item.price}đ</Text>
-                      ) : (
-                        <Text style={styles.tagNew}>⚠️ Mới (Chưa có trong kho)</Text>
-                      )}
-                    </View>
-
-                    {/* Ảnh */}
-                    {item.img_url && <Image source={{ uri: item.img_url }} style={styles.itemThumb} />}
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-
-            <View style={styles.modalFooter}>
-              <TouchableOpacity style={styles.btnCancel} onPress={() => setModalSuggestVisible(false)}>
-                <Text style={{ color: '#666' }}>Hủy</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.btnConfirm} onPress={handleConfirmSuggestions}>
-                <Text style={{ color: 'white', fontWeight: 'bold' }}>Thêm ngay</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* --- MODAL CHECK GIÁ AI --- */}
-      <Modal
-        animationType="fade"
-        transparent={true}
+      {/* --- MODAL PRICE CHECK (MỚI) --- */}
+      <PriceCheckModal
         visible={priceModalVisible}
-        onRequestClose={() => setPriceModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { maxWidth: 320 }]}>
-            <Text style={styles.modalTitle}>Đề xuất giá AI 🤖</Text>
-
-            {targetItem && (
-              <View style={{ width: '100%', marginVertical: 15 }}>
-                <Text style={{ textAlign: 'center', fontSize: 16, fontWeight: 'bold', marginBottom: 15 }}>
-                  {targetItem.name}
-                </Text>
-
-                {/* So sánh giá */}
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 }}>
-                  <Text style={{ color: '#666' }}>Giá hiện tại:</Text>
-                  <Text style={{ fontWeight: 'bold', color: '#333' }}>
-                    {/* Tính giá đơn vị: Total / Quantity */}
-                    {formatCurrency((parseFloat(targetItem.total_price) / targetItem.quantity).toString())}
-                  </Text>
-                </View>
-
-                <View style={{ height: 1, backgroundColor: '#eee', marginVertical: 5 }} />
-
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
-                  <Text style={{ color: '#666' }}>Giá AI gợi ý:</Text>
-
-                  {loadingAiPrice ? (
-                    <ActivityIndicator size="small" color="#6C5CE7" />
-                  ) : (
-                    <Text style={{ fontWeight: 'bold', color: '#6C5CE7', fontSize: 18 }}>
-                      {aiPrice>0? formatCurrency(aiPrice.toString()) : 'chưa rõ'}
-                    </Text>
-                  )}
-                </View>
-              </View>
-            )}
-
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.btn, styles.btnCancel]}
-                onPress={() => setPriceModalVisible(false)}
-              >
-                <Text style={styles.btnText}>Giữ giá cũ</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.btn,
-                  { backgroundColor: (loadingAiPrice || aiPrice <= 0) ? '#ccc' : '#6C5CE7' }
-                ]}
-                onPress={handleConfirmUpdatePrice}
-                disabled={loadingAiPrice || aiPrice <= 0}
-              >
-                <Text style={[styles.btnText, { color: 'white' }]}>Cập nhật</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+        onClose={() => setPriceModalVisible(false)}
+        onConfirm={handleConfirmUpdatePrice}
+        targetItem={targetItem}
+        aiPrice={aiPrice}
+        loading={loadingAiPrice}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  // Giữ lại các style chung cho Layout, Header, Footer
+  // Xóa các style thừa của ItemRow, SuggestModal, PriceModal
+  container: { flex: 1, backgroundColor: '#f2f2f7' },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-  // --- LAYOUT CHUNG ---
-  container: {
-    flex: 1,
-    backgroundColor: '#f2f2f7'
-  },
-  centered: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center'
-  },
+  // Header Screen
+  headerSection: { backgroundColor: '#fff', padding: 15, marginBottom: 10, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 2, elevation: 2 },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  sectionTitle: { fontSize: 18, fontWeight: 'bold', color: '#333' },
+  editBtn: { color: '#007AFF', fontSize: 16, fontWeight: '600' },
+  infoText: { fontSize: 15, marginBottom: 4, color: '#444' },
+  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 6, padding: 10, marginBottom: 8, backgroundColor: '#f9f9f9', fontSize: 16 },
+  cancelText: { color: 'red', textAlign: 'right', marginTop: 5, fontSize: 14 },
 
-  // --- HEADER CỦA SCREEN (Phần thông tin Cart) ---
-  headerSection: {
-    backgroundColor: '#fff',
-    padding: 15,
-    marginBottom: 10,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333'
-  },
-  editBtn: {
-    color: '#007AFF',
-    fontSize: 16,
-    fontWeight: '600'
-  },
-  infoText: {
-    fontSize: 15,
-    marginBottom: 4,
-    color: '#444'
-  },
-  input: { // Input sửa tên Cart
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 6,
-    padding: 10,
-    marginBottom: 8,
-    backgroundColor: '#f9f9f9',
-    fontSize: 16
-  },
-  cancelText: {
-    color: 'red',
-    textAlign: 'right',
-    marginTop: 5,
-    fontSize: 14
-  },
+  // Buttons
+  actionButtonRow: { flexDirection: 'row', gap: 10, marginBottom: 15, paddingHorizontal: 15 },
+  btn: { flex: 1, padding: 14, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  btnCancel: { backgroundColor: '#f2f2f7', marginRight: 10 },
+  btnSave: { backgroundColor: '#34C759' },
+  btnConfirm: { backgroundColor: '#6C5CE7' },
+  btnText: { fontSize: 16, fontWeight: '600' },
 
-  // --- KHU VỰC NÚT BẤM (Thêm thủ công + AI) ---
-  // Style cho hàng chứa 2 nút thêm
-  actionButtonRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 15,
-    paddingHorizontal: 15 // Thêm padding nếu nút bị sát lề
-  },
+  // Footer Total
+  footerContainer: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'white', padding: 20, borderTopWidth: 1, borderColor: '#eee', shadowColor: "#000", shadowOffset: { width: 0, height: -2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 10, paddingBottom: Platform.OS === 'ios' ? 30 : 20 },
+  footerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  footerLabel: { fontSize: 16, color: '#666', fontWeight: '500' },
+  footerTotal: { fontSize: 20, fontWeight: 'bold', color: '#007AFF' },
+  footerRowSmall: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 5 },
+  footerLabelSmall: { fontSize: 14, color: '#999' },
+  footerTotalSmall: { fontSize: 14, color: '#34C759', fontWeight: '600', textDecorationLine: 'line-through' },
 
-  // --- ITEM TRONG DANH SÁCH (Sản phẩm đã thêm) ---
-  itemRow: {
-    backgroundColor: '#fff',
-    padding: 12,
-    marginHorizontal: 15,
-    marginBottom: 10,
-    borderRadius: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2
-  },
-  itemImage: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    backgroundColor: '#eee',
-    marginRight: 15
-  },
-  itemInfo: {
-    flex: 1,
-    justifyContent: 'center'
-  },
-  itemName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#000',
-    marginBottom: 4
-  },
-  itemQuantity: {
-    fontSize: 13,
-    color: '#666'
-  },
-  itemPrice: {
-    fontSize: 15,
-    fontWeight: 'bold',
-    color: '#FF3B30',
-    marginTop: 2
-  },
-  emptyText: {
-    textAlign: 'center',
-    marginTop: 40,
-    color: '#999',
-    fontSize: 16
-  },
+  // Empty List
+  emptyText: { textAlign: 'center', marginTop: 40, color: '#999', fontSize: 16 },
 
-  // --- [BỔ SUNG] HEADER CỦA MÀN HÌNH CHI TIẾT (Có nút Back) ---
-  modalListHeader: {
-    height: 50, // Hoặc 60 tùy thiết kế
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 15,
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderColor: '#eee',
-    // Nếu dùng SafeAreaView thì có thể bỏ margin này, 
-    // nếu dùng View thường thì giữ lại để tránh tai thỏ
-    marginTop: Platform.OS === 'ios' ? 40 : 0
-  },
+  // Modal Common
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  modalContent: { backgroundColor: 'white', borderRadius: 16, padding: 20, width: '100%', maxHeight: '85%', shadowColor: "#000", shadowOpacity: 0.25, shadowRadius: 10, elevation: 10 },
+  modalTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 20, textAlign: 'center', color: '#333' },
+  modalListHeader: { height: 50, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 15, backgroundColor: 'white', borderBottomWidth: 1, borderColor: '#eee', marginTop: Platform.OS === 'ios' ? 40 : 0 },
 
-  // --- CÁC MODAL (CHUNG) ---
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20
-  },
-  modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 16,
-    padding: 20,
-    width: '100%',
-    maxHeight: '85%',
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 10
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 5,
-    textAlign: 'center',
-    color: '#333'
-  },
-  modalSubtitle: {
-    textAlign: 'center',
-    color: '#666',
-    marginBottom: 15
-  },
+  // Form in Modal
+  label: { fontSize: 14, fontWeight: '600', marginBottom: 6, color: '#555', marginTop: 10 },
+  modalInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 12, fontSize: 16, backgroundColor: '#fafafa' },
+  modalButtons: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 30, alignItems: 'center' },
 
-  // --- FORM INPUT TRONG MODAL ---
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 6,
-    color: '#555',
-    marginTop: 10
-  },
-  modalInput: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    backgroundColor: '#fafafa'
-  },
-  pickerContainer: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    backgroundColor: '#fafafa',
-    height: 50,
-    justifyContent: 'center',
-  },
-  picker: {
-    width: '100%',
-    height: '100%',
-  },
-
-  // --- NÚT BẤM (Footer Modal) ---
-  modalButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 20,
-    alignItems: 'center'
-  },
-  btn: { // Style nút chung
-    flex: 1, // Để chia đều chiều ngang nếu cần
-    padding: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  btnCancel: {
-    backgroundColor: '#f2f2f7',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    marginRight: 10
-  },
-  btnSave: {
-    backgroundColor: '#34C759',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    elevation: 2
-  },
-  btnConfirm: { // Nút xác nhận AI
-    backgroundColor: '#6C5CE7',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8
-  },
-  btnText: {
-    fontSize: 16,
-    fontWeight: '600'
-  },
-
-  // Footer của Modal AI (để căn chỉnh nút Hủy và Thêm)
-  modalFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 10
-  },
-
-  // --- IMAGE PICKER ---
-  imagePickerBtn: {
-    width: '100%',
-    height: 160,
-    backgroundColor: '#fafafa',
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#ddd',
-    borderStyle: 'dashed',
-    marginTop: 5,
-    marginBottom: 5
-  },
-  imagePreview: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 10,
-    resizeMode: 'cover',
-  },
-
-  // --- AI SUGGESTION LIST (MỚI) ---
-  suggestionList: {
-    marginBottom: 20,
-  },
-  suggestionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#eee',
-    borderRadius: 8,
-    marginBottom: 8,
-    backgroundColor: '#fafafa'
-  },
-  suggestionItemSelected: {
-    borderColor: '#6C5CE7',
-    backgroundColor: '#F0F0FF'
-  },
-
-  // Checkbox
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    borderWidth: 2,
-    borderColor: '#ccc',
-    marginRight: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'white'
-  },
-  checkboxChecked: {
-    backgroundColor: '#6C5CE7',
-    borderColor: '#6C5CE7'
-  },
-
-  // Tag phân loại
-  tagExisting: {
-    fontSize: 12,
-    color: '#00b894',
-    marginTop: 4,
-    fontWeight: '500'
-  },
-  tagNew: {
-    fontSize: 12,
-    color: '#e17055',
-    marginTop: 4,
-    fontWeight: '500'
-  },
-  itemThumb: {
-    width: 40,
-    height: 40,
-    borderRadius: 4,
-    marginLeft: 10,
-    backgroundColor: '#eee'
-  },
-  checkPriceBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F0F0FF',
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-    alignSelf: 'flex-start', // Để nút không bị kéo dài hết chiều ngang
-    marginTop: 6,
-    borderWidth: 1,
-    borderColor: '#E0E0FF'
-  },
-  checkPriceText: {
-    fontSize: 12,
-    color: '#6C5CE7',
-    marginLeft: 4,
-    fontWeight: '500'
-  }
+  // Image Picker
+  imagePickerBtn: { width: '100%', height: 160, backgroundColor: '#fafafa', borderRadius: 10, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#ddd', borderStyle: 'dashed', marginTop: 5, marginBottom: 5 },
+  imagePreview: { width: '100%', height: '100%', borderRadius: 10, resizeMode: 'cover' },
+  pickerContainer: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, backgroundColor: '#fafafa', height: 50, justifyContent: 'center' },
+  picker: { width: '100%', height: '100%' },
 });
