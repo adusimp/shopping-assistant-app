@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { uploadAsync, FileSystemUploadType } from 'expo-file-system/legacy';
 import {
   View,
   Text,
@@ -13,15 +12,19 @@ import {
   Platform,
 } from 'react-native';
 import { useLocalSearchParams, Stack } from 'expo-router';
-import ProductListScreen, { ProductCategory } from '@/components/productListScreen';
 import { Ionicons } from '@expo/vector-icons';
 import { scheduleCartNotification } from '@/common/notificationHelper';
-import { AiSuggestModal } from '@/components/cart/aiSuggestModal';
-import { CartItemRow } from '@/components/cart/cartItem';
-import { PriceCheckModal } from '@/components/cart/priceCheckModal';
-import { ManualAddModal } from '@/components/cart/addProductModal';
+import { uploadAsync, FileSystemUploadType } from 'expo-file-system/legacy';
 
-// TODO: Thay đổi IP này thành IP máy tính của bạn
+// --- IMPORT CÁC COMPONENT ĐÃ TÁCH ---
+// (Đảm bảo đường dẫn file của bạn đúng như bạn đã tạo)
+import ProductListScreen, { ProductCategory } from '@/components/productListScreen';
+import { CartItemRow } from '@/components/cart/cartItem'; 
+import { ManualAddModal } from '@/components/cart/addProductModal';
+import { AiSuggestModal } from '@/components/cart/aiSuggestModal';
+import { PriceCheckModal } from '@/components/cart/priceCheckModal';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
 const API_URL = process.env.EXPO_PUBLIC_API_URL;
 
 interface CartDetail {
@@ -31,7 +34,6 @@ interface CartDetail {
   budget: number;
 }
 
-// Interface này phải khớp với cái bên CartItemRow
 interface CartItem {
   product_id: number;
   name: string;
@@ -42,7 +44,7 @@ interface CartItem {
 }
 
 export default function ListDetailScreen() {
-
+  const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams();
   const cartId = Array.isArray(id) ? id[0] : id;
 
@@ -55,23 +57,18 @@ export default function ListDetailScreen() {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState('');
   const [editNotify, setEditNotify] = useState('');
-  const [editBudget, setEditBudget] = useState(''); // State cho budget
+  const [editBudget, setEditBudget] = useState('');
 
-  // --- State Modal Thủ công & Kho ---
+  // --- State Visibility Modals ---
   const [modalManualVisible, setModalManualVisible] = useState(false);
   const [modalListVisible, setModalListVisible] = useState(false);
-
-  // Form fields (Thủ công)
-
-
-  // --- State AI Suggest Modal ---
   const [modalSuggestVisible, setModalSuggestVisible] = useState(false);
-  const [isSuggesting, setIsSuggesting] = useState(false);
-  const [suggestedItems, setSuggestedItems] = useState<any[]>([]);
-
-  // --- State Price Check Modal ---
   const [priceModalVisible, setPriceModalVisible] = useState(false);
-  const [targetItem, setTargetItem] = useState<CartItem | null>(null);
+
+  // --- State AI Logic ---
+  const [isSuggesting, setIsSuggesting] = useState(false);
+  const [suggestedItems, setSuggestedItems] = useState<any[]>([]); // Dữ liệu AI trả về
+  const [targetItem, setTargetItem] = useState<CartItem | null>(null); // Item đang check giá
   const [aiPrice, setAiPrice] = useState<number>(0);
   const [loadingAiPrice, setLoadingAiPrice] = useState(false);
 
@@ -89,7 +86,7 @@ export default function ListDetailScreen() {
     });
   };
 
-  // --- Effects & Computed ---
+  // --- Effects & Computed (Tính toán Ngân sách) ---
   const totalPrice = useMemo(() => {
     return items.reduce((sum, item) => sum + (parseFloat(item.total_price) || 0), 0);
   }, [items]);
@@ -98,13 +95,22 @@ export default function ListDetailScreen() {
     return items.reduce((sum, item) => item.is_bought ? sum + (parseFloat(item.total_price) || 0) : sum, 0);
   }, [items]);
 
+  // Logic hiển thị thanh Budget
+  const budget = cart?.budget || 0;
+  const percent = budget > 0 ? (totalPrice / budget) * 100 : 0;
+  const remaining = budget - totalPrice;
+  const isOverBudget = remaining < 0;
+  let progressColor = '#34C759'; 
+  if (percent > 100) progressColor = '#FF3B30';
+  else if (percent > 80) progressColor = '#FFCC00';
+
   useEffect(() => {
     if (!cartId) return;
     fetchCartDetails();
     fetchCartItems();
   }, [cartId]);
 
-  // --- Logic API ---
+  // --- 1. API Calls: Lấy dữ liệu ---
   const fetchCartDetails = async () => {
     try {
       const res = await fetch(`${API_URL}/cart/${cartId}`);
@@ -145,7 +151,7 @@ export default function ListDetailScreen() {
     } catch (error) { console.error(error); }
   };
 
-  // --- Logic Tương tác Item ---
+  // --- 2. Logic Thao tác Item (Xóa, Check, Check Giá) ---
   const handleToggleStatus = async (item: CartItem) => {
     const originalItems = [...items];
     setItems((prevItems) => sortItems(prevItems.map((i) => i.product_id === item.product_id ? { ...i, is_bought: !i.is_bought } : i)));
@@ -165,7 +171,7 @@ export default function ListDetailScreen() {
   const handleDeleteItem = (productId: number) => {
     const executeDelete = async () => {
       try {
-        const res = await fetch(`${API_URL}/cart/${id}/items/${productId}`, {
+        const res = await fetch(`${API_URL}/cart/${cartId}/items/${productId}`, {
           method: 'DELETE', headers: { 'Content-Type': 'application/json' }
         });
         if (res.ok) {
@@ -187,7 +193,7 @@ export default function ListDetailScreen() {
     if (items.length === 0) return;
     const executeClear = async () => {
       try {
-        const res = await fetch(`${API_URL}/cart/${id}/clear`, {
+        const res = await fetch(`${API_URL}/cart/${cartId}/clear`, {
           method: 'DELETE', headers: { 'Content-Type': 'application/json' }
         });
         if (res.ok) { setItems([]); }
@@ -204,7 +210,7 @@ export default function ListDetailScreen() {
     }
   };
 
-  // --- Logic Price Check Modal ---
+  // --- 3. Logic: Check Giá AI ---
   const openPriceSuggestion = async (item: CartItem) => {
     setTargetItem(item);
     setPriceModalVisible(true);
@@ -240,7 +246,7 @@ export default function ListDetailScreen() {
     } catch (error) { Alert.alert("Lỗi mạng"); }
   };
 
-  // --- Logic AI Suggest Modal ---
+  // --- 4. Logic: Gợi ý món AI ---
   const handleGetSuggestion = async () => {
     if (!cart?.name) return;
     setIsSuggesting(true);
@@ -264,7 +270,7 @@ export default function ListDetailScreen() {
     setIsSuggesting(true);
     try {
       const payload = {
-        cartId: Number(id),
+        cartId: Number(cartId),
         items: itemsToSave.map(item => ({
           type: item.type,
           id: item.type === 'EXISTING' ? item.id : undefined,
@@ -288,13 +294,8 @@ export default function ListDetailScreen() {
     finally { setIsSuggesting(false); }
   };
 
-  // --- Logic Manual Add ---
-
-
-  // Hàm xử lý khi Modal con bấm "Lưu"
+  // --- 5. Logic: Thêm thủ công (Nhận data từ Modal) ---
   const handleAddItem = async (formData: any) => {
-    // formData sẽ có dạng: { name, price, quantity, category, imageUri }
-
     try {
       const textFields = {
         cart_id: String(cartId),
@@ -307,57 +308,31 @@ export default function ListDetailScreen() {
       if (Platform.OS === 'web') {
         const postData = new FormData();
         Object.entries(textFields).forEach(([k, v]) => postData.append(k, v as string));
-
         if (formData.imageUri) {
           const res = await fetch(formData.imageUri);
           const blob = await res.blob();
           postData.append('file', blob, 'upload.jpg');
         }
-
-        const res = await fetch(`${API_URL}/product/add-product-to-cart`, {
-          method: 'POST', body: postData
-        });
-
-        if (res.ok) {
-          Alert.alert("Thành công", "Đã thêm sản phẩm!");
-          fetchCartItems();
-        }
+        await fetch(`${API_URL}/product/add-product-to-cart`, { method: 'POST', body: postData });
       } else {
-        // Mobile Upload
-        if (!formData.imageUri) {
-          Alert.alert("Thông báo", "Bạn chưa chọn ảnh (sẽ dùng ảnh mặc định)");
-          // Nếu bắt buộc ảnh thì return tại đây
-        }
-
         if (formData.imageUri) {
           await uploadAsync(`${API_URL}/product/add-product-to-cart`, formData.imageUri, {
-            fieldName: 'file',
-            httpMethod: 'POST',
-            uploadType: FileSystemUploadType.MULTIPART,
-            parameters: textFields,
+            fieldName: 'file', httpMethod: 'POST', uploadType: FileSystemUploadType.MULTIPART, parameters: textFields,
           });
         } else {
-          // Nếu không có ảnh, bạn cần API hỗ trợ không gửi file, 
-          // hoặc gửi request thường thay vì uploadAsync
-          // Tạm thời mình giả định bạn luôn chọn ảnh hoặc API bạn xử lý được.
+           // Xử lý case không có ảnh (nếu backend cho phép)
         }
-
-        Alert.alert("Thành công", "Đã thêm sản phẩm!");
-        fetchCartItems();
       }
-
-      // Đóng modal thì component con tự làm rồi, ở đây chỉ cần load lại data
+      
+      Alert.alert("Thành công", "Đã thêm sản phẩm");
       setModalManualVisible(false);
-
-    } catch (e) {
-      Alert.alert("Lỗi", String(e));
-    }
+      fetchCartItems();
+    } catch (e) { Alert.alert("Lỗi", String(e)); }
   };
-
 
   if (loading) return <ActivityIndicator style={styles.centered} size="large" />;
 
-  // --- UI ---
+  // --- RENDER UI ---
   return (
     <View style={styles.container}>
       <Stack.Screen
@@ -396,19 +371,50 @@ export default function ListDetailScreen() {
 
         {isEditing ? (
           <View>
-            <Text style={styles.label}>Tên:</Text>
+            <Text style={styles.label}>Tên danh sách:</Text>
             <TextInput style={styles.input} value={editName} onChangeText={setEditName} />
-            <Text style={styles.label}>Ngân sách:</Text>
+            <Text style={styles.label}>Ngân sách (VNĐ):</Text>
             <TextInput style={styles.input} value={editBudget} onChangeText={setEditBudget} keyboardType="numeric" placeholder="0" />
             <Text style={styles.label}>Hẹn giờ:</Text>
             <TextInput style={styles.input} value={editNotify} onChangeText={setEditNotify} />
-            <TouchableOpacity onPress={() => setIsEditing(false)}><Text style={styles.cancelText}>Hủy</Text></TouchableOpacity>
+            <View style={{flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 10}}>
+                <TouchableOpacity onPress={() => setIsEditing(false)}><Text style={styles.cancelText}>Hủy</Text></TouchableOpacity>
+                <TouchableOpacity onPress={handleUpdateCart}><Text style={[styles.editBtn, {color: '#34C759'}]}>Lưu lại</Text></TouchableOpacity>
+            </View>
           </View>
         ) : (
           <View>
-            <Text style={styles.infoText}>📦 {cart?.name}</Text>
-            <Text style={styles.infoText}>💰 Ngân sách: {cart?.budget ? formatCurrency(cart.budget) : 'Chưa đặt'}</Text>
-            <Text style={styles.infoText}>⏰ {cart?.notify_at ? new Date(cart.notify_at).toLocaleString('vi-VN') : 'Chưa đặt giờ'}</Text>
+            <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
+                <Text style={styles.infoText}>📦 {cart?.name}</Text>
+                <Text style={styles.infoText}>⏰ {cart?.notify_at ? new Date(cart.notify_at).toLocaleDateString('vi-VN') : '---'}</Text>
+            </View>
+
+            {/* --- THANH NGÂN SÁCH --- */}
+            {budget > 0 ? (
+                <View style={styles.budgetContainer}>
+                    <View style={{flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6}}>
+                        <Text style={{color: '#666', fontSize: 13}}>
+                            Đã dùng: <Text style={{fontWeight: 'bold', color: '#333'}}>{formatCurrency(totalPrice)}</Text>
+                        </Text>
+                        <Text style={{color: '#666', fontSize: 13}}>
+                            Ngân sách: {formatCurrency(budget)}
+                        </Text>
+                    </View>
+                    <View style={styles.progressBarBackground}>
+                        <View style={[styles.progressBarFill, { width: `${Math.min(percent, 100)}%`, backgroundColor: progressColor }]} />
+                    </View>
+                    <View style={{flexDirection: 'row', justifyContent: 'space-between', marginTop: 4}}>
+                        <Text style={{fontSize: 12, fontWeight: '600', color: progressColor}}>{Math.round(percent)}%</Text>
+                        <Text style={{fontSize: 12, fontWeight: '600', color: isOverBudget ? '#FF3B30' : '#34C759'}}>
+                            {isOverBudget ? `Vượt quá: ${formatCurrency(Math.abs(remaining))}` : `Còn dư: ${formatCurrency(remaining)}`}
+                        </Text>
+                    </View>
+                </View>
+            ) : (
+                <TouchableOpacity onPress={() => setIsEditing(true)} style={{marginTop: 5}}>
+                    <Text style={{color: '#007AFF', fontSize: 13, fontStyle: 'italic'}}>+ Thiết lập ngân sách ngay</Text>
+                </TouchableOpacity>
+            )}
           </View>
         )}
       </View>
@@ -423,7 +429,6 @@ export default function ListDetailScreen() {
       <FlatList
         data={items}
         keyExtractor={(item) => item.product_id.toString()}
-        // --- SỬ DỤNG COMPONENT MỚI ---
         renderItem={({ item }) => (
           <CartItemRow
             item={item}
@@ -436,7 +441,7 @@ export default function ListDetailScreen() {
         ListEmptyComponent={<Text style={styles.emptyText}>Giỏ hàng trống</Text>}
       />
 
-      <View style={styles.footerContainer}>
+      <View style={[styles.footerContainer,{ paddingBottom: Math.max(insets.bottom, 20) }]}>
         <View style={styles.footerRow}>
           <Text style={styles.footerLabel}>Tổng dự kiến:</Text>
           <Text style={styles.footerTotal}>{formatCurrency(totalPrice.toString())}</Text>
@@ -449,38 +454,30 @@ export default function ListDetailScreen() {
         )}
       </View>
 
-      {/* --- CÁC MODAL --- */}
-      <Modal
-        visible={modalListVisible}
-        animationType="slide"
-      // ...
-      >
+      {/* --- CÁC MODAL ĐÃ TÁCH --- */}
+      
+      {/* 1. Modal Kho */}
+      <Modal visible={modalListVisible} animationType="slide" onRequestClose={() => setModalListVisible(false)}>
         <View style={{ flex: 1, backgroundColor: '#f5f5f5' }}>
-          {/* ... Header Modal ... */}
           <View style={styles.modalListHeader}>
             <TouchableOpacity onPress={() => setModalListVisible(false)} style={{ padding: 5 }}>
               <Text style={{ color: '#007AFF', fontSize: 16 }}>Đóng</Text>
             </TouchableOpacity>
-
             <Text style={{ fontSize: 17, fontWeight: 'bold' }}>Kho sản phẩm</Text>
-
-            {/* View rỗng này để đẩy tiêu đề vào giữa (cân đối với nút Đóng) */}
             <View style={{ width: 40 }} />
           </View>
-          {/* Gọi Component tại đây */}
-          <ProductListScreen
-            cartId={Number(cartId)}
-            onItemAdded={() => fetchCartItems()} // Reload giỏ hàng sau khi thêm
-          />
+          <ProductListScreen cartId={Number(cartId)} onItemAdded={() => fetchCartItems()} />
         </View>
       </Modal>
+
+      {/* 2. Modal Thêm Thủ Công */}
       <ManualAddModal
         visible={modalManualVisible}
         onClose={() => setModalManualVisible(false)}
         onAdd={handleAddItem}
       />
 
-      {/* --- MODAL AI SUGGEST (MỚI) --- */}
+      {/* 3. Modal AI Suggest */}
       <AiSuggestModal
         visible={modalSuggestVisible}
         onClose={() => setModalSuggestVisible(false)}
@@ -489,7 +486,7 @@ export default function ListDetailScreen() {
         onAddItems={handleConfirmSuggestions}
       />
 
-      {/* --- MODAL PRICE CHECK (MỚI) --- */}
+      {/* 4. Modal Check Giá */}
       <PriceCheckModal
         visible={priceModalVisible}
         onClose={() => setPriceModalVisible(false)}
@@ -503,11 +500,9 @@ export default function ListDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  // Giữ lại các style chung cho Layout, Header, Footer
-  // Xóa các style thừa của ItemRow, SuggestModal, PriceModal
   container: { flex: 1, backgroundColor: '#f2f2f7' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-
+  
   // Header Screen
   headerSection: { backgroundColor: '#fff', padding: 15, marginBottom: 10, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 2, elevation: 2 },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
@@ -516,12 +511,16 @@ const styles = StyleSheet.create({
   infoText: { fontSize: 15, marginBottom: 4, color: '#444' },
   input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 6, padding: 10, marginBottom: 8, backgroundColor: '#f9f9f9', fontSize: 16 },
   cancelText: { color: 'red', textAlign: 'right', marginTop: 5, fontSize: 14 },
+  label: { fontSize: 14, fontWeight: '600', marginBottom: 6, color: '#555', marginTop: 10 },
+
+  // Budget Styles
+  budgetContainer: { marginTop: 12, backgroundColor: '#f9f9f9', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#eee' },
+  progressBarBackground: { height: 10, backgroundColor: '#e0e0e0', borderRadius: 5, overflow: 'hidden' },
+  progressBarFill: { height: '100%', borderRadius: 5 },
 
   // Buttons
   actionButtonRow: { flexDirection: 'row', gap: 10, marginBottom: 15, paddingHorizontal: 15 },
   btn: { flex: 1, padding: 14, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  btnCancel: { backgroundColor: '#f2f2f7', marginRight: 10 },
-  btnSave: { backgroundColor: '#34C759' },
   btnConfirm: { backgroundColor: '#6C5CE7' },
   btnText: { fontSize: 16, fontWeight: '600' },
 
@@ -537,20 +536,6 @@ const styles = StyleSheet.create({
   // Empty List
   emptyText: { textAlign: 'center', marginTop: 40, color: '#999', fontSize: 16 },
 
-  // Modal Common
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  modalContent: { backgroundColor: 'white', borderRadius: 16, padding: 20, width: '100%', maxHeight: '85%', shadowColor: "#000", shadowOpacity: 0.25, shadowRadius: 10, elevation: 10 },
-  modalTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 20, textAlign: 'center', color: '#333' },
+  // Modal List Header
   modalListHeader: { height: 50, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 15, backgroundColor: 'white', borderBottomWidth: 1, borderColor: '#eee', marginTop: Platform.OS === 'ios' ? 40 : 0 },
-
-  // Form in Modal
-  label: { fontSize: 14, fontWeight: '600', marginBottom: 6, color: '#555', marginTop: 10 },
-  modalInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 12, fontSize: 16, backgroundColor: '#fafafa' },
-  modalButtons: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 30, alignItems: 'center' },
-
-  // Image Picker
-  imagePickerBtn: { width: '100%', height: 160, backgroundColor: '#fafafa', borderRadius: 10, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#ddd', borderStyle: 'dashed', marginTop: 5, marginBottom: 5 },
-  imagePreview: { width: '100%', height: '100%', borderRadius: 10, resizeMode: 'cover' },
-  pickerContainer: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, backgroundColor: '#fafafa', height: 50, justifyContent: 'center' },
-  picker: { width: '100%', height: '100%' },
 });

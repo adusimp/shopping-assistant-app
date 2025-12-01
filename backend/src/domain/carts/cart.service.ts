@@ -85,6 +85,9 @@ export class CartService {
       if (dto.notify_at !== undefined) {
         cart.notify_at = dto.notify_at;
       }
+      if (dto.budget !== undefined) {
+        cart.budget = dto.budget;
+      }
 
       return this.cartRepository.save(cart);
     } catch (error) {
