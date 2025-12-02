@@ -112,58 +112,64 @@ export class CartService {
   //AI function
 async suggestProducts(cartName: string) {
     try {
-      // 1. PROMPT (Giữ nguyên, yêu cầu trả về mỗi món 1 dòng)
+      // 1. SỬA PROMPT: Yêu cầu trả về kèm GIÁ
       const prompt = `
         Tôi muốn mua sắm cho dịp: "${cartName}".
-        Hãy liệt kê 5-10 món đồ CỤ THỂ, QUAN TRỌNG NHẤT.
+        Hãy liệt kê 5-10 món đồ CỤ THỂ, QUAN TRỌNG NHẤT kèm theo GIÁ TIỀN ƯỚC LƯỢNG (VND).
         
         QUY TẮC BẮT BUỘC (STRICT MODE):
-        1. Chỉ trả về danh sách thô (raw text), MỖI MÓN NẰM TRÊN 1 DÒNG.
-        2. KHÔNG dùng ký tự đầu dòng như: gạch ngang (-), dấu sao (*), hay số thứ tự (1.).
-        3. KHÔNG bao quanh tên món bằng dấu ngoặc kép (") hay dấu nháy (').
-        4. KHÔNG có lời dẫn đầu hay kết thúc (Ví dụ: "Đây là danh sách...", "Hy vọng bạn thích...").
-        5. Tên món phải cụ thể, ngắn gọn (2-5 từ)
-        6. Phải là 1 món cụ thể không để từ ghép ví dụ : ly đĩa,...
+        1. Chỉ trả về danh sách thô, MỖI MÓN 1 DÒNG.
+        2. ĐỊNH DẠNG: Tên sản phẩm | Giá tiền (chỉ số).
+        3. KHÔNG dùng ký tự đầu dòng (-, 1., *).
+        4. KHÔNG bao quanh bằng dấu ngoặc kép.
+        5. Tên món phải cụ thể, ngắn gọn (2-5 từ).
+        6. Giá tiền là giá trung bình tại Việt Nam (VND).
         
         Ví dụ output chuẩn (làm y hệt thế này):
-        Bánh kem bắp
-        Nến sinh nhật số
-        Mũ chóp giấy
-        Pháo bông que
+        Bánh kem bắp | 350000
+        Nến sinh nhật số | 15000
+        Mũ chóp giấy | 20000
+        Pháo bông que | 50000
       `;
 
       const result = await this.model.generateContent(prompt);
       const text = result.response.text();
 
-      // Tách dòng
-      let aiKeywords = text
+      // 2. PARSE KẾT QUẢ (Tách Tên và Giá)
+      let aiItems = text
         .split('\n')
-        .map(item => item.trim())
-        .filter(item => item.length > 0 && !item.startsWith('```'));
+        .map(line => {
+          // Xử lý dòng: "Bánh kem | 350000"
+          const parts = line.split('|');
+          const name = parts[0]?.trim(); // Lấy "Bánh kem"
+          
+          // Lấy giá, xóa bỏ chữ 'đ', 'vnd', dấu chấm phẩy nếu có
+          const priceStr = parts[1]?.trim() || '0';
+          const price = parseInt(priceStr.replace(/[^0-9]/g, '')) || 0;
 
-      // 2. LOGIC TÌM KIẾM KHẮT KHE (AND LOGIC)
+          return { name, price };
+        })
+        .filter(item => item.name && item.name.length > 0 && !item.name.startsWith('```'));
+
+      // 3. LOGIC TÌM KIẾM
       const suggestions = await Promise.all(
-        aiKeywords.map(async (keyword) => {
+        aiItems.map(async (aiItem) => {
+          const keyword = aiItem.name;
           
           const qb = this.productRepository.createQueryBuilder('product');
 
-          // Tách từ khóa: "Bánh kem" -> ["Bánh", "kem"]
-          // Lọc bỏ từ quá ngắn (dưới 2 ký tự) và các từ nối vô nghĩa nếu cần
+          // Tách từ khóa để tìm kiếm
           const terms = keyword.split(' ').filter(t => t.length >= 2);
 
-          // --- LOGIC MỚI: BẮT BUỘC PHẢI KHỚP TẤT CẢ TỪ KHÓA ---
           if (terms.length > 0) {
               terms.forEach((term, index) => {
                   if (index === 0) {
-                      // Từ đầu tiên dùng WHERE
                       qb.where(`product.name LIKE :term${index}`, { [`term${index}`]: `%${term}%` });
                   } else {
-                      // Các từ sau dùng AND WHERE (Bắt buộc phải có)
                       qb.andWhere(`product.name LIKE :term${index}`, { [`term${index}`]: `%${term}%` });
                   }
               });
           } else {
-              // Trường hợp keyword rỗng hoặc toàn từ 1 ký tự -> tìm chính xác
               qb.where(`product.name LIKE :full`, { full: `%${keyword}%` });
           }
 
@@ -173,18 +179,18 @@ async suggestProducts(cartName: string) {
             return {
               type: 'EXISTING',
               id: existingProduct.id,
-              name: existingProduct.name,
-              price: existingProduct.price,
+              name: existingProduct.name, // Ưu tiên tên chuẩn trong DB
+              price: existingProduct.price, // Ưu tiên giá chuẩn trong DB
               img_url: existingProduct.img_url,
               original_keyword: keyword,
             };
           } else {
-            // Nếu không khớp đủ các từ -> Trả về NEW (An toàn hơn)
+            // --- LOGIC MỚI: DÙNG GIÁ CỦA AI ---
             return {
               type: 'NEW',
               id: null,
-              name: keyword,
-              price: 0,
+              name: keyword, // Tên từ AI
+              price: aiItem.price, // <--- LẤY GIÁ AI ĐỀ XUẤT TẠI ĐÂY
               img_url: null,
               original_keyword: keyword,
             };

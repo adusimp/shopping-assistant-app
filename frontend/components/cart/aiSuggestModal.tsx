@@ -15,17 +15,23 @@ interface SuggestionItem {
   type: 'NEW' | 'EXISTING';
   price: number | string;
   img_url?: string | null;
-  id?: number; // Có nếu là EXISTING
+  id?: number;
 }
 
-// 2. Props nhận từ cha
 interface AiSuggestModalProps {
   visible: boolean;
   onClose: () => void;
   cartName: string | undefined;
-  suggestions: SuggestionItem[]; // Danh sách AI gợi ý
-  onAddItems: (selectedItems: SuggestionItem[]) => void; // Hàm trả kết quả về cha
+  suggestions: SuggestionItem[];
+  onAddItems: (selectedItems: SuggestionItem[]) => void;
 }
+
+// Helper format tiền (đặt nội bộ hoặc import)
+const formatCurrency = (price: string | number) => {
+  const numberPrice = typeof price === 'string' ? parseFloat(price) : price;
+  if (isNaN(numberPrice)) return '0 ₫';
+  return numberPrice.toLocaleString('vi-VN', { style: 'currency', currency: 'VND' });
+};
 
 export const AiSuggestModal = ({
   visible,
@@ -34,17 +40,14 @@ export const AiSuggestModal = ({
   suggestions,
   onAddItems
 }: AiSuggestModalProps) => {
-  // --- STATE NỘI BỘ: Quản lý việc tích chọn ---
   const [selectedItems, setSelectedItems] = useState<SuggestionItem[]>([]);
 
-  // Reset lựa chọn mỗi khi Modal mở ra hoặc danh sách gợi ý thay đổi
   useEffect(() => {
     if (visible) {
       setSelectedItems([]);
     }
   }, [visible, suggestions]);
 
-  // Logic tích chọn (Checkbox)
   const toggleSuggestion = (item: SuggestionItem) => {
     const exists = selectedItems.find(i => i.name === item.name);
     if (exists) {
@@ -54,9 +57,8 @@ export const AiSuggestModal = ({
     }
   };
 
-  // Logic bấm nút Thêm
   const handleConfirm = () => {
-    onAddItems(selectedItems); // Gửi danh sách đã chọn về cho cha xử lý API
+    onAddItems(selectedItems);
   };
 
   return (
@@ -75,6 +77,7 @@ export const AiSuggestModal = ({
             {suggestions.map((item, index) => {
               const isSelected = selectedItems.some(i => i.name === item.name);
               const isExisting = item.type === 'EXISTING';
+              const displayPrice = formatCurrency(item.price);
 
               return (
                 <TouchableOpacity
@@ -93,11 +96,18 @@ export const AiSuggestModal = ({
                   {/* Nội dung */}
                   <View style={{ flex: 1 }}>
                     <Text style={styles.itemName}>{item.name}</Text>
+                    
+                    {/* --- CẬP NHẬT HIỂN THỊ GIÁ TẠI ĐÂY --- */}
                     {isExisting ? (
-                      <Text style={styles.tagExisting}>✅ Có sẵn • {item.price}đ</Text>
+                      <Text style={styles.tagExisting}>
+                        ✅ Kho: {displayPrice}
+                      </Text>
                     ) : (
-                      <Text style={styles.tagNew}>⚠️ Mới (Chưa có trong kho)</Text>
+                      <Text style={styles.tagNew}>
+                        ✨ AI ước tính: {displayPrice}
+                      </Text>
                     )}
+                    {/* -------------------------------------- */}
                   </View>
 
                   {/* Ảnh */}
@@ -129,7 +139,6 @@ export const AiSuggestModal = ({
   );
 };
 
-// 3. Styles (Copy từ file gốc sang)
 const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
@@ -197,15 +206,17 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#333'
   },
+  // Style cho hàng có sẵn (Màu xanh)
   tagExisting: {
     fontSize: 12,
     color: '#00b894',
     marginTop: 4,
     fontWeight: '500'
   },
+  // Style cho hàng mới AI (Màu cam/tím)
   tagNew: {
     fontSize: 12,
-    color: '#e17055',
+    color: '#e17055', // Hoặc màu tím #6C5CE7 nếu thích
     marginTop: 4,
     fontWeight: '500'
   },
