@@ -35,24 +35,40 @@ export class CartService {
     this.model = this.genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
   }
 
+ // --- 1. TẠO CART GẮN VỚI USER ---
   async createCart(data: CreateCartDto): Promise<Cart> {
     try {
       const cart = this.cartRepository.create({
         name: data.name,
         notify_at: data.notify_at,
+        budget: data.budget || 0, // Lưu ngân sách (mặc định 0 nếu không có)
+        
+        // QUAN TRỌNG: Gán cart này cho User có ID gửi lên
+        user: { id: data.userId } 
       });
-      return this.cartRepository.save(cart);
+
+      return await this.cartRepository.save(cart);
     } catch (error) {
-      console.error(error);
+      console.error('Lỗi tạo cart:', error);
       throw error;
     }
   }
-  async getAllCart() {
+
+  // --- 2. LẤY CART CỦA USER CỤ THỂ ---
+  // Hàm này bây giờ bắt buộc phải nhận vào userId
+  async getAllCart(userId: number) {
     try {
-      const cart_list = await this.cartRepository.find();
+      const cart_list = await this.cartRepository.find({
+        where: { 
+          user: { id: userId } // Chỉ lấy Cart của user này
+        },
+        order: {
+          created_at: 'DESC' // Sắp xếp mới nhất lên đầu
+        }
+      });
       return cart_list;
     } catch (error) {
-      console.error(error);
+      console.error('Lỗi lấy danh sách:', error);
       throw error;
     }
   }

@@ -1,25 +1,35 @@
-import React from 'react';
-import { StyleSheet } from 'react-native';
-import { ThemedView } from '@/components/themed-view';
-import CartManager from '@/components/cartManager';
+import React, { useEffect } from 'react';
+import { View, Text, ActivityIndicator } from 'react-native';
+import { LoginView } from '@/components/loginScreen';
+import { useUser } from '@/context/userContext';
+import { router } from 'expo-router';
 
-// Import component quản lý Cart (cái mà chúng ta vừa viết với API)
-// Đảm bảo bạn đã tạo file components/CartManager.tsx như hướng dẫn trước
+export default function IndexScreen() {
+  const { user } = useUser();
 
+  console.log(">>> INDEX SCREEN RENDER. User:", user);
 
-export default function HomeScreen() {
-  return (
-    <ThemedView style={styles.container}>
-      {/* Chỉ hiển thị 1 component duy nhất là CartManager */}
-      {/* CartManager đã bao gồm cả phần Tạo và Danh sách */}
-      <CartManager />
-    </ThemedView>
-  );
+  useEffect(() => {
+    // Nếu user có dữ liệu -> Chuyển trang
+    if (user) {
+      console.log(">>> INDEX: Có user rồi, chuyển sang /home ngay!");
+      // Dùng setTimeout 0 để đảm bảo render xong mới navigate
+      setTimeout(() => {
+        router.replace('/home');
+      }, 0);
+    }
+  }, [user]);
+
+  // Nếu đã có user thì hiện màn hình trắng chờ chuyển trang (tránh hiện lại login chớp nhoáng)
+  if (user) {
+    return (
+      <View style={{flex:1, justifyContent:'center', alignItems:'center'}}>
+        <ActivityIndicator size="large" />
+        <Text>Đang vào trang chủ...</Text>
+      </View>
+    );
+  }
+
+  // Nếu chưa có user -> Hiện Login
+  return <LoginView />;
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    paddingTop: 40, // Chừa khoảng cách cho thanh trạng thái
-  },
-});

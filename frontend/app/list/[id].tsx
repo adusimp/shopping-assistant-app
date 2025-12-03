@@ -88,6 +88,38 @@ export default function ListDetailScreen() {
       return a.is_bought ? 1 : -1;
     });
   };
+// --- HELPERS CHO WEB DATE PICKER (EDIT) ---
+  const formatDateForWeb = (date: Date) => {
+    const d = new Date(date);
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    return d.toISOString().split('T')[0];
+  };
+
+  const formatTimeForWeb = (date: Date) => {
+    const d = new Date(date);
+    const hh = d.getHours().toString().padStart(2, '0');
+    const mm = d.getMinutes().toString().padStart(2, '0');
+    return `${hh}:${mm}`;
+  };
+
+  const handleWebEditDateChange = (e: any) => {
+    const str = e.target.value;
+    if (!str) return;
+    const d = new Date(editDate);
+    const [y, m, day] = str.split('-').map(Number);
+    d.setFullYear(y, m - 1, day);
+    setEditDate(d);
+  };
+
+  const handleWebEditTimeChange = (e: any) => {
+    const str = e.target.value;
+    if (!str) return;
+    const [h, m] = str.split(':').map(Number);
+    const d = new Date(editDate);
+    d.setHours(h);
+    d.setMinutes(m);
+    setEditDate(d);
+  };
 
   // --- Xử lý Date Picker ---
   const onChangeEditDate = (event: any, selectedDate?: Date) => {
@@ -311,48 +343,81 @@ export default function ListDetailScreen() {
             <Text style={styles.label}>Ngân sách (VNĐ):</Text>
             <TextInput style={styles.input} value={editBudget} onChangeText={setEditBudget} keyboardType="numeric" placeholder="0" />
             
-            {/* --- CẬP NHẬT GIAO DIỆN CHỌN NGÀY GIỜ --- */}
             <Text style={styles.label}>Thời gian thông báo:</Text>
             
-            {/* Hiển thị ngày giờ đang chọn */}
-            <View style={{backgroundColor:'#f0f0f0', padding: 10, borderRadius: 8, marginBottom: 10, alignItems: 'center'}}>
-                <Text style={{fontWeight: 'bold', color: '#007AFF'}}>
-                    {editDate.toLocaleDateString('vi-VN')} - {editDate.toLocaleTimeString('vi-VN', {hour:'2-digit', minute:'2-digit'})}
-                </Text>
-            </View>
+            {/* --- LOGIC CHỌN NGÀY GIỜ (WEB / MOBILE) --- */}
+            {Platform.OS === 'web' ? (
+                /* GIAO DIỆN WEB */
+                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 15 }}>
+                    {/* @ts-ignore */}
+                    {React.createElement('input', {
+                        type: 'date',
+                        value: formatDateForWeb(editDate),
+                        onChange: handleWebEditDateChange,
+                        style: { padding: 10, flex: 1, border: '1px solid #ccc', borderRadius: 5 }
+                    })}
+                    {/* @ts-ignore */}
+                    {React.createElement('input', {
+                        type: 'time',
+                        value: formatTimeForWeb(editDate),
+                        onChange: handleWebEditTimeChange,
+                        style: { padding: 10, flex: 1, border: '1px solid #ccc', borderRadius: 5 }
+                    })}
+                </View>
+            ) : (
+                /* GIAO DIỆN MOBILE */
+                <>
+                    {/* Hiển thị kết quả */}
+                    <View style={{ backgroundColor: '#f0f0f0', padding: 10, borderRadius: 8, marginBottom: 10, alignItems: 'center' }}>
+                        <Text style={{ fontWeight: 'bold', color: '#007AFF' }}>
+                            {editDate.toLocaleDateString('vi-VN')} - {editDate.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
+                        </Text>
+                    </View>
 
-            {/* 2 Nút bấm chọn Date/Time */}
-            <View style={{flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15}}>
-                <TouchableOpacity 
-                    style={[styles.btn, {backgroundColor: 'white', borderWidth: 1, borderColor: '#ccc', marginRight: 5}]} 
-                    onPress={() => showEditMode('date')}
-                >
-                    <Text style={{color: '#333'}}>📅 Đổi Ngày</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity 
-                    style={[styles.btn, {backgroundColor: 'white', borderWidth: 1, borderColor: '#ccc', marginLeft: 5}]} 
-                    onPress={() => showEditMode('time')}
-                >
-                    <Text style={{color: '#333'}}>⏰ Đổi Giờ</Text>
-                </TouchableOpacity>
-            </View>
+                    {/* Nút bấm */}
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 }}>
+                        <TouchableOpacity
+                            style={[styles.btn, { backgroundColor: 'white', borderWidth: 1, borderColor: '#ccc', marginRight: 5 }]}
+                            onPress={() => showEditMode('date')}
+                        >
+                            <Text style={{ color: '#333' }}>📅 Đổi Ngày</Text>
+                        </TouchableOpacity>
 
-            {/* Picker (Ẩn hiện) */}
-            {showEditPicker && (
-                <DateTimePicker
-                    value={editDate}
-                    mode={editPickerMode}
-                    is24Hour={true}
-                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                    onChange={onChangeEditDate}
-                />
+                        <TouchableOpacity
+                            style={[styles.btn, { backgroundColor: 'white', borderWidth: 1, borderColor: '#ccc', marginLeft: 5 }]}
+                            onPress={() => showEditMode('time')}
+                        >
+                            <Text style={{ color: '#333' }}>⏰ Đổi Giờ</Text>
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* Picker ẩn (Hiện ra khi bấm nút) */}
+                    {showEditPicker && (
+                        <DateTimePicker
+                            value={editDate}
+                            mode={editPickerMode}
+                            is24Hour={true}
+                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                            onChange={onChangeEditDate}
+                        />
+                    )}
+                    
+                    {/* Nút Xong cho iOS */}
+                    {Platform.OS === 'ios' && showEditPicker && (
+                        <TouchableOpacity 
+                            style={{alignItems:'flex-end', marginBottom: 10}}
+                            onPress={() => setShowEditPicker(false)}
+                        >
+                            <Text style={{color: '#007AFF', fontWeight:'bold'}}>Xong</Text>
+                        </TouchableOpacity>
+                    )}
+                </>
             )}
             {/* ----------------------------------------- */}
 
-            <View style={{flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 10}}>
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 10 }}>
                 <TouchableOpacity onPress={() => setIsEditing(false)}><Text style={styles.cancelText}>Hủy</Text></TouchableOpacity>
-                <TouchableOpacity onPress={handleUpdateCart}><Text style={[styles.editBtn, {color: '#34C759'}]}>Lưu lại</Text></TouchableOpacity>
+                <TouchableOpacity onPress={handleUpdateCart}><Text style={[styles.editBtn, { color: '#34C759' }]}>Lưu lại</Text></TouchableOpacity>
             </View>
           </View>
         ) : (

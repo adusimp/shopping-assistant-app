@@ -11,11 +11,15 @@ import {
   Alert,
   RefreshControl,
   Platform,
+  Modal, // Import Modal
+  KeyboardAvoidingView, // Để bàn phím không che form
+  ScrollView
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { scheduleCartNotification } from '@/common/notificationHelper';
+import { useUser } from '@/context/userContext';
+import { Ionicons } from '@expo/vector-icons'; // Import Icon cho nút thêm
 
-// TODO: Thay đổi IP này thành IP máy tính của bạn
 const API_URL = process.env.EXPO_PUBLIC_API_URL;
 
 interface Cart {
@@ -24,542 +28,266 @@ interface Cart {
   notify_at: string | null;
   created_at: string;
   updated_at: string;
-  budget: number; // Thêm trường này để hiển thị nếu cần (tuỳ chọn)
+  budget: number;
 }
 
 export default function CartManager() {
+  const { user, logout } = useUser();
+
   const [carts, setCarts] = useState<Cart[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  // --- STATE MỚI: QUẢN LÝ MODAL ---
+  const [modalVisible, setModalVisible] = useState(false);
+
   // Form States
   const [name, setName] = useState('');
-  const [budget, setBudget] = useState(''); // <--- 1. STATE MỚI CHO NGÂN SÁCH
+  const [budget, setBudget] = useState('');
 
   // Date Picker States
   const [date, setDate] = useState(new Date());
   const [showPicker, setShowPicker] = useState(false);
   const [mode, setMode] = useState<'date' | 'time'>('date');
 
-  // --- XỬ LÝ DATE PICKER ---
-  const onChangeDate = (event: any, selectedDate?: Date) => {
-    if (Platform.OS === 'android') {
-      setShowPicker(false);
-    }
-    if (selectedDate) {
-      setDate(selectedDate);
-    }
-  };
+  // ... Helpers Date Picker (Giữ nguyên) ...
+  const onChangeDate = (event: any, selectedDate?: Date) => { if (Platform.OS === 'android') setShowPicker(false); if (selectedDate) setDate(selectedDate); };
+  const showMode = (currentMode: 'date' | 'time') => { setShowPicker(true); setMode(currentMode); };
+  const getTodayString = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const formatDateForWeb = (d: Date) => { const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().split('T')[0]; };
+  const formatTimeForWeb = (d: Date) => { const hh = d.getHours().toString().padStart(2, '0'); const mm = d.getMinutes().toString().padStart(2, '0'); return `${hh}:${mm}`; };
+  const handleWebDateChange = (e: any) => { const str = e.target.value; if(!str) return; const d = new Date(date); const [y, m, day] = str.split('-').map(Number); d.setFullYear(y, m-1, day); setDate(d); };
+  const handleWebTimeChange = (e: any) => { const str = e.target.value; if(!str) return; const [h, m] = str.split(':').map(Number); const d = new Date(date); d.setHours(h); d.setMinutes(m); setDate(d); };
 
-  const showMode = (currentMode: 'date' | 'time') => {
-    setShowPicker(true);
-    setMode(currentMode);
-  };
-
-  // --- HÀM HỖ TRỢ WEB ---
-  const getTodayString = () => {
-    const d = new Date();
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-
-  const formatDateForWeb = (date: Date) => {
-    const d = new Date(date);
-    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-    return d.toISOString().split('T')[0];
-  };
-
-  const formatTimeForWeb = (date: Date) => {
-    const d = new Date(date);
-    const hh = d.getHours().toString().padStart(2, '0');
-    const mm = d.getMinutes().toString().padStart(2, '0');
-    return `${hh}:${mm}`;
-  };
-
-  const handleWebDateChange = (e: any) => {
-    const newDateStr = e.target.value;
-    if (!newDateStr) return;
-    const newDate = new Date(date);
-    const [year, month, day] = newDateStr.split('-').map(Number);
-    newDate.setFullYear(year, month - 1, day);
-    setDate(newDate);
-  };
-
-  const handleWebTimeChange = (e: any) => {
-    const newTimeStr = e.target.value;
-    if (!newTimeStr) return;
-    const [hours, minutes] = newTimeStr.split(':').map(Number);
-    const newDate = new Date(date);
-    newDate.setHours(hours);
-    newDate.setMinutes(minutes);
-    setDate(newDate);
-  };
-
-  // 1. Hàm GET: Lấy danh sách cart
+  // Fetch Carts
   const fetchCarts = async () => {
+    if (!user) return;
     try {
-      const response = await fetch(`${API_URL}/cart`);
+      const response = await fetch(`${API_URL}/cart?userId=${user.user_id}`);
       const data = await response.json();
-      const sortedData = data.sort((a: Cart, b: Cart) => b.id - a.id);
-      setCarts(sortedData);
-    } catch (error) {
-      console.error('Lỗi lấy danh sách:', error);
-      Alert.alert('Lỗi', 'Không thể kết nối đến server');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
+      if (Array.isArray(data)) {
+          const sortedData = data.sort((a: Cart, b: Cart) => b.id - a.id);
+          setCarts(sortedData);
+      } else {
+          setCarts([]);
+      }
+    } catch (error) { console.error(error); } 
+    finally { setLoading(false); setRefreshing(false); }
   };
 
-  useEffect(() => {
-    fetchCarts();
-  }, []);
+  useEffect(() => { fetchCarts(); }, [user]);
 
-  // 2. Hàm POST: Tạo cart mới
+  // Handle Create
   const handleCreateCart = async () => {
-    if (!name.trim()) {
-      Alert.alert('Thiếu thông tin', 'Vui lòng nhập tên giỏ hàng');
-      return;
-    }
+    if (!name.trim()) { Alert.alert('Thiếu thông tin', 'Vui lòng nhập tên giỏ hàng'); return; }
+    if (!user) { Alert.alert("Lỗi", "Vui lòng đăng nhập lại"); return; }
 
     try {
       const offset = date.getTimezoneOffset() * 60000;
       const localISOTime = (new Date(date.getTime() - offset)).toISOString().slice(0, 19);
 
-      // --- 2. CẬP NHẬT PAYLOAD ---
       const payload = {
         name: name,
         notify_at: localISOTime,
-        budget: parseFloat(budget) || 0, // Gửi budget lên server (nếu rỗng thì là 0)
+        budget: parseFloat(budget) || 0,
+        userId: user.user_id,
       };
 
       const response = await fetch(`${API_URL}/cart`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
 
       if (response.ok) {
         const newCartData = await response.json(); 
-        
-        // Hẹn giờ thông báo
         if (newCartData.notify_at) {
-            await scheduleCartNotification(
-                newCartData.id, 
-                newCartData.name, 
-                newCartData.notify_at
-            );
+            await scheduleCartNotification(newCartData.id, newCartData.name, newCartData.notify_at);
         }
 
-        Alert.alert('Thành công', 'Đã tạo Cart và hẹn giờ nhắc nhở!');
+        Alert.alert('Thành công', 'Đã tạo Cart mới!');
         
-        // Reset form
-        setName('');
-        setBudget(''); // Reset ô budget
-        setDate(new Date());
+        // Reset và Đóng Modal
+        setName(''); setBudget(''); setDate(new Date());
+        setModalVisible(false); // <--- Đóng Modal
         
         fetchCarts();
-      } else {
-        Alert.alert('Thất bại', 'Server trả về lỗi');
-      }
-    } catch (error) {
-      console.error('Lỗi tạo cart:', error);
-      Alert.alert('Lỗi', 'Không thể tạo cart');
-    }
+      } else { Alert.alert('Thất bại', 'Server trả về lỗi'); }
+    } catch (error) { console.error('Lỗi tạo cart:', error); }
   };
 
-  // 3. Hàm DELETE
-  const executeDelete = async (id: number) => {
-    try {
-      const response = await fetch(`${API_URL}/cart/${id}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      if (response.ok) {
-        setCarts((prevList) => prevList.filter((item) => item.id !== id));
-        if (Platform.OS !== 'web') {
-          Alert.alert("Thành công", "Đã xóa đơn hàng.");
-        }
-      } else {
-        Alert.alert("Thất bại", "Không thể xóa đơn hàng lúc này.");
-      }
-    } catch (error) {
-      console.error("Lỗi xóa:", error);
-      Alert.alert("Lỗi", "Có lỗi xảy ra khi kết nối server.");
-    }
-  };
-
+  // Handle Delete
   const handleDelete = (id: number) => {
-    if (Platform.OS === 'web') {
-      const confirmDelete = window.confirm("Bạn có chắc chắn muốn xóa giỏ hàng này không?");
-      if (confirmDelete) executeDelete(id);
-    } else {
-      Alert.alert(
-        "Xác nhận xóa",
-        "Bạn có chắc chắn muốn xóa giỏ hàng này không?",
-        [
-          { text: "Hủy", style: "cancel" },
-          { text: "Xóa", style: "destructive", onPress: () => executeDelete(id) }
-        ]
-      );
-    }
+    const executeDelete = async () => {
+        try {
+            const res = await fetch(`${API_URL}/cart/${id}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
+            if (res.ok) setCarts(prev => prev.filter(i => i.id !== id));
+        } catch(e) { console.error(e); }
+    };
+    if (Platform.OS === 'web') { if(confirm("Xóa?")) executeDelete(); }
+    else { Alert.alert("Xóa", "Chắc chắn xóa?", [{text: "Hủy"}, {text: "Xóa", style: "destructive", onPress: () => executeDelete()}]); }
   };
 
-  const onRefresh = () => {
-    setRefreshing(true);
-    fetchCarts();
-  };
-
-  const formatCurrency = (amount: number) => {
-    return amount.toLocaleString('vi-VN', { style: 'currency', currency: 'VND' });
-  };
+  const formatDateTime = (iso: string) => iso ? new Date(iso).toLocaleString('vi-VN') : '';
+  const formatCurrency = (val: number) => val.toLocaleString('vi-VN', {style: 'currency', currency: 'VND'});
 
   const renderItem = ({ item }: { item: Cart }) => (
-    <TouchableOpacity
-      style={styles.card}
-      onPress={() => {
-        router.push({
-          pathname: '/list/[id]',
-          params: { id: item.id }
-        });
-      }}
-    >
-      <View style={styles.cardHeader}>
-        <View style={styles.headerInfo}>
-          <Text style={styles.cardTitle}>{item.name}</Text>
-          <Text style={styles.cardId}>ID: {item.id}</Text>
+    <TouchableOpacity style={styles.card} onPress={() => router.push({ pathname: '/list/[id]', params: { id: item.id } })}>
+        <View style={styles.cardHeader}>
+            <Text style={styles.cardTitle}>{item.name}</Text>
+            <TouchableOpacity onPress={() => handleDelete(item.id)}><Text style={styles.deleteText}>Xóa</Text></TouchableOpacity>
         </View>
-
-        <TouchableOpacity
-          style={styles.deleteButton}
-          onPress={() => handleDelete(item.id)}
-        >
-          <Text style={styles.deleteText}>Xóa</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.cardBody}>
-        {/* Hiển thị budget nếu có */}
-        {item.budget > 0 && (
-             <Text style={styles.label}>
-                Ngân sách: <Text style={[styles.value, {color: '#007AFF'}]}>{formatCurrency(Number(item.budget))}</Text>
-             </Text>
-        )}
-
-        <Text style={styles.label}>
-          Thông báo: <Text style={styles.value}>{item.notify_at ? formatDateTime(item.notify_at) : 'Không có'}</Text>
-        </Text>
-        <Text style={styles.subText}>Tạo lúc: {formatDateTime(item.created_at)}</Text>
-      </View>
+        <View style={styles.cardBody}>
+            {item.budget > 0 && <Text style={styles.label}>Ngân sách: <Text style={[styles.value, {color: '#007AFF'}]}>{formatCurrency(item.budget)}</Text></Text>}
+            <Text style={styles.label}>Thông báo: <Text style={styles.value}>{item.notify_at ? formatDateTime(item.notify_at) : 'Không có'}</Text></Text>
+            <Text style={styles.subText}>Tạo lúc: {formatDateTime(item.created_at)}</Text>
+        </View>
     </TouchableOpacity>
   );
 
   return (
     <View style={styles.container}>
-      <View style={styles.inputContainer}>
-        <Text style={styles.sectionTitle}>Tạo Cart Mới</Text>
-
-        <Text style={styles.label}>Tên Cart:</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Nhập tên Cart (VD: Mua đồ tết)"
-          value={name}
-          onChangeText={setName}
-        />
-
-        {/* --- 3. UI NHẬP NGÂN SÁCH --- */}
-        <Text style={styles.label}>Ngân sách dự kiến (VNĐ):</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="VD: 500000"
-          value={budget}
-          onChangeText={setBudget}
-          keyboardType="numeric"
-        />
-        {/* --------------------------- */}
-
-        <Text style={styles.label}>Thời gian thông báo:</Text>
-
-        {/* KHU VỰC CHỌN NGÀY GIỜ */}
-        {Platform.OS === 'web' ? (
-          <View style={{ flexDirection: 'row', gap: 20, marginBottom: 15 }}>
-            <View>
-              <Text style={styles.webLabel}>Ngày:</Text>
-              {/* @ts-ignore */}
-              {React.createElement('input', {
-                type: 'date',
-                value: formatDateForWeb(date),
-                onChange: handleWebDateChange,
-                min: getTodayString(),
-                style: {
-                  padding: 10,
-                  borderRadius: 5,
-                  border: '1px solid #ccc',
-                  backgroundColor: 'white',
-                  height: 40,
-                  width: 150,
-                  fontSize: 14,
-                  color: '#333'
-                }
-              })}
-            </View>
-
-            <View>
-              <Text style={styles.webLabel}>Giờ:</Text>
-              {/* @ts-ignore */}
-              {React.createElement('input', {
-                type: 'time',
-                value: formatTimeForWeb(date),
-                onChange: handleWebTimeChange,
-                style: {
-                  padding: 10,
-                  borderRadius: 5,
-                  border: '1px solid #ccc',
-                  backgroundColor: 'white',
-                  height: 40,
-                  width: 120,
-                  fontSize: 14,
-                  color: '#333'
-                }
-              })}
-            </View>
-          </View>
-        ) : (
-          /* MOBILE */
-          <>
-            <View style={styles.dateTimeDisplay}>
-              <Text style={styles.dateTimeText}>
-                {date.toLocaleDateString('vi-VN')} - {date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
-              </Text>
-            </View>
-
-            <View style={styles.dateBtnContainer}>
-              <TouchableOpacity style={styles.dateBtn} onPress={() => showMode('date')}>
-                <Text style={styles.dateBtnText}>📅 Chọn Ngày</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.dateBtn} onPress={() => showMode('time')}>
-                <Text style={styles.dateBtnText}>⏰ Chọn Giờ</Text>
-              </TouchableOpacity>
-            </View>
-
-            {showPicker && (
-              <DateTimePicker
-                testID="dateTimePicker"
-                value={date}
-                mode={mode}
-                is24Hour={true}
-                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                onChange={onChangeDate}
-                minimumDate={new Date()}
-              />
-            )}
-
-            {Platform.OS === 'ios' && showPicker && (
-              <TouchableOpacity
-                style={[styles.button, { backgroundColor: '#f0f0f0', marginTop: 5, marginBottom: 10 }]}
-                onPress={() => setShowPicker(false)}>
-                <Text style={{ color: '#007AFF' }}>Xong / Đóng</Text>
-              </TouchableOpacity>
-            )}
-          </>
-        )}
-
-        <TouchableOpacity style={styles.button} onPress={handleCreateCart}>
-          <Text style={styles.buttonText}>TẠO MỚI</Text>
-        </TouchableOpacity>
+      
+      {/* HEADER */}
+      <View style={styles.userHeader}>
+          <Text style={styles.welcomeText}>👋 Xin chào, {user?.email}</Text>
+          <TouchableOpacity onPress={logout} style={styles.logoutBtn}>
+              <Text style={styles.logoutText}>Đăng xuất</Text>
+          </TouchableOpacity>
       </View>
 
+      {/* --- NÚT MỞ MODAL TẠO MỚI --- */}
+      <TouchableOpacity style={styles.fabButton} onPress={() => setModalVisible(true)}>
+         <Text style={styles.fabText}>+ Tạo giỏ hàng mới</Text>
+      </TouchableOpacity>
+      {/* --------------------------- */}
+
+      {/* DANH SÁCH CART */}
       <View style={styles.listContainer}>
         <Text style={styles.sectionTitle}>Danh Sách Cart ({carts.length})</Text>
-
-        {loading ? (
-          <ActivityIndicator size="large" color="#007AFF" />
-        ) : (
+        {loading ? <ActivityIndicator size="large" /> : (
           <FlatList
             data={carts}
-            keyExtractor={(item) => item.id.toString()}
+            keyExtractor={item => item.id.toString()}
             renderItem={renderItem}
-            refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-            }
-            ListEmptyComponent={<Text style={styles.emptyText}>Chưa có dữ liệu</Text>}
-            contentContainerStyle={{ paddingBottom: 20 }}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => {setRefreshing(true); fetchCarts();}} />}
+            ListEmptyComponent={<Text style={styles.emptyText}>Chưa có giỏ hàng</Text>}
+            contentContainerStyle={{ paddingBottom: 80 }} // Chừa chỗ cho nút nếu cần
           />
         )}
       </View>
+
+      {/* --- MODAL TẠO CART --- */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={modalVisible}
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Tạo Cart Mới</Text>
+            
+            <ScrollView showsVerticalScrollIndicator={false}>
+                <Text style={styles.label}>Tên Cart:</Text>
+                <TextInput style={styles.modalInput} placeholder="Nhập tên Cart (VD: Mua đồ tết)" value={name} onChangeText={setName} />
+
+                <Text style={styles.label}>Ngân sách dự kiến (VNĐ):</Text>
+                <TextInput style={styles.modalInput} placeholder="VD: 500000" value={budget} onChangeText={setBudget} keyboardType="numeric" />
+
+                <Text style={styles.label}>Thời gian thông báo:</Text>
+                
+                {/* Chọn Ngày Giờ */}
+                {Platform.OS === 'web' ? (
+                  <View style={{ flexDirection: 'row', gap: 10, marginBottom: 15 }}>
+                    {/* ... (Code Input Date Web cũ giữ nguyên) ... */}
+                    {React.createElement('input', { type: 'date', value: formatDateForWeb(date), onChange: handleWebDateChange, style: { padding: 10, flex:1, border:'1px solid #ccc', borderRadius:5 } })}
+                    {React.createElement('input', { type: 'time', value: formatTimeForWeb(date), onChange: handleWebTimeChange, style: { padding: 10, flex:1, border:'1px solid #ccc', borderRadius:5 } })}
+                  </View>
+                ) : (
+                  <>
+                    <View style={styles.dateTimeDisplay}>
+                      <Text style={styles.dateTimeText}>{date.toLocaleDateString('vi-VN')} - {date.toLocaleTimeString('vi-VN', {hour:'2-digit', minute:'2-digit'})}</Text>
+                    </View>
+                    <View style={styles.dateBtnContainer}>
+                      <TouchableOpacity style={styles.dateBtn} onPress={() => showMode('date')}><Text style={styles.dateBtnText}>📅 Chọn Ngày</Text></TouchableOpacity>
+                      <TouchableOpacity style={styles.dateBtn} onPress={() => showMode('time')}><Text style={styles.dateBtnText}>⏰ Chọn Giờ</Text></TouchableOpacity>
+                    </View>
+                    {showPicker && <DateTimePicker value={date} mode={mode} is24Hour={true} display="spinner" onChange={onChangeDate} minimumDate={new Date()} />}
+                    {Platform.OS === 'ios' && showPicker && <TouchableOpacity style={styles.iosCloseBtn} onPress={() => setShowPicker(false)}><Text style={{color:'#007AFF'}}>Xong</Text></TouchableOpacity>}
+                  </>
+                )}
+            </ScrollView>
+
+            <View style={styles.modalButtons}>
+                <TouchableOpacity style={[styles.btn, styles.btnCancel]} onPress={() => setModalVisible(false)}>
+                    <Text style={styles.btnTextBlack}>Hủy</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.btn, styles.btnSave]} onPress={handleCreateCart}>
+                    <Text style={styles.btnTextWhite}>TẠO MỚI</Text>
+                </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
 
-const formatDateTime = (isoString: string) => {
-  if (!isoString) return '';
-  const date = new Date(isoString);
-  return date.toLocaleString('vi-VN');
-};
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-    padding: 15,
-  },
-  inputContainer: {
-    backgroundColor: 'white',
+  container: { flex: 1, padding: 15, backgroundColor: '#f5f5f5' },
+  userHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
+  welcomeText: { fontSize: 16, fontWeight: 'bold', color: '#333' },
+  logoutBtn: { padding: 8, backgroundColor: '#ffebee', borderRadius: 6 },
+  logoutText: { color: 'red', fontWeight: '600', fontSize: 12 },
+  
+  // Nút Mở Modal (FAB Style)
+  fabButton: {
+    backgroundColor: '#007AFF',
     padding: 15,
     borderRadius: 10,
-    marginBottom: 20,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 10,
-    color: '#333',
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 5,
-    fontSize: 16,
-    backgroundColor: '#fafafa',
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 5,
-    marginTop: 10,
-  },
-  webLabel: {
-    fontSize: 12,
-    color: '#666',
-    marginBottom: 5
-  },
-  dateTimeDisplay: {
-    backgroundColor: '#f0f0f0',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 10,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#ddd'
-  },
-  dateTimeText: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#007AFF',
-  },
-  dateBtnContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
     marginBottom: 15,
+    shadowColor: "#000", shadowOffset: {width: 0, height: 2}, shadowOpacity: 0.2, shadowRadius: 3, elevation: 3
   },
-  dateBtn: {
-    flex: 0.48,
-    backgroundColor: 'white',
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#007AFF',
-    alignItems: 'center',
-  },
-  dateBtnText: {
-    color: '#007AFF',
-    fontWeight: '600',
-    fontSize: 14
-  },
-  button: {
-    backgroundColor: '#007AFF',
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 5
-  },
-  buttonText: {
-    color: 'white',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-  listContainer: {
-    flex: 1,
-  },
-  card: {
-    backgroundColor: 'white',
-    padding: 15,
-    borderRadius: 8,
-    marginBottom: 10,
-    borderLeftWidth: 5,
-    borderLeftColor: '#007AFF',
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-    paddingBottom: 8,
-  },
-  headerInfo: {
-    flex: 1,
-    marginRight: 10,
-  },
-  cardTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  cardId: {
-    fontSize: 12,
-    color: '#888',
-    fontWeight: 'bold',
-    marginTop: 2,
-  },
-  deleteButton: {
-    backgroundColor: '#ffebee',
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 6,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  deleteText: {
-    color: '#d32f2f',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  cardBody: {
-    marginTop: 5,
-  },
-  value: {
-    fontWeight: '600',
-    color: '#333',
-  },
-  subText: {
-    fontSize: 12,
-    color: '#999',
-    marginTop: 5,
-    fontStyle: 'italic',
-    textAlign: 'right',
-  },
-  emptyText: {
-    textAlign: 'center',
-    marginTop: 20,
-    color: '#888',
-  },
+  fabText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
+
+  listContainer: { flex: 1 },
+  sectionTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 10, color: '#333' },
+  
+  // Card Item
+  card: { backgroundColor: 'white', padding: 15, marginBottom: 10, borderRadius: 8, elevation: 2 },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
+  cardTitle: { fontWeight: 'bold', fontSize: 16 },
+  cardId: { fontSize: 12, color: '#888' },
+  headerInfo: { flex: 1, marginRight: 10 },
+  deleteButton: { padding: 5, backgroundColor: '#fff0f0', borderRadius: 4 },
+  deleteText: { color: 'red', fontWeight: 'bold', fontSize: 12 },
+  cardBody: { marginTop: 5 },
+  label: { color: '#555', fontSize: 14, marginTop: 2 },
+  value: { fontWeight: '600', color: '#333' },
+  subText: { fontSize: 12, color: '#999', marginTop: 5, textAlign: 'right' },
+  emptyText: { textAlign: 'center', marginTop: 20, color: '#888' },
+
+  // MODAL STYLES
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
+  modalContent: { backgroundColor: 'white', borderRadius: 15, padding: 20, maxHeight: '90%', elevation: 5 },
+  modalTitle: { fontSize: 20, fontWeight: 'bold', textAlign: 'center', marginBottom: 20 },
+  modalInput: { borderWidth: 1, borderColor: '#ddd', padding: 12, borderRadius: 8, marginBottom: 15, fontSize: 16, backgroundColor: '#fafafa' },
+  
+  // Date Picker UI inside Modal
+  dateTimeDisplay: { backgroundColor: '#f0f0f0', padding: 12, borderRadius: 8, marginBottom: 10, alignItems: 'center' },
+  dateTimeText: { color: '#007AFF', fontWeight: 'bold' },
+  dateBtnContainer: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
+  dateBtn: { flex: 0.48, padding: 10, backgroundColor: 'white', borderWidth: 1, borderColor: '#007AFF', borderRadius: 8, alignItems: 'center' },
+  dateBtnText: { color: '#007AFF', fontWeight: '600' },
+  iosCloseBtn: { alignItems: 'flex-end', padding: 10, backgroundColor: '#f0f0f0' },
+
+  // Buttons in Modal
+  modalButtons: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 20 },
+  btn: { flex: 0.48, padding: 14, borderRadius: 8, alignItems: 'center' },
+  btnCancel: { backgroundColor: '#f0f0f0' },
+  btnSave: { backgroundColor: '#007AFF' },
+  btnTextWhite: { color: 'white', fontWeight: 'bold' },
+  btnTextBlack: { color: '#333', fontWeight: 'bold' },
 });

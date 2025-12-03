@@ -3,10 +3,11 @@ import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import * as Notifications from 'expo-notifications';
-import { useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { Platform } from 'react-native';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { UserProvider } from '@/context/userContext';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -39,12 +40,12 @@ export default function RootLayout() {
 
       const { status: existingStatus } = await Notifications.getPermissionsAsync();
       let finalStatus = existingStatus;
-      
+
       if (existingStatus !== 'granted') {
         const { status } = await Notifications.requestPermissionsAsync();
         finalStatus = status;
       }
-      
+
       if (finalStatus !== 'granted') {
         console.log('Quyền thông báo bị từ chối!');
         return;
@@ -56,15 +57,15 @@ export default function RootLayout() {
     // 2. Lắng nghe sự kiện bấm thông báo
     const responseListener = Notifications.addNotificationResponseReceivedListener(response => {
       const data = response.notification.request.content.data;
-      
+
       if (data && data.cartId) {
         console.log("Bấm thông báo Cart ID:", data.cartId);
-        
+
         router.push({
           pathname: '/list/[id]',
           // --- SỬA LỖI 1: Ép kiểu sang String ---
           // TypeScript yêu cầu params URL phải là chuỗi
-          params: { id: String(data.cartId) } 
+          params: { id: String(data.cartId) }
         });
       }
     });
@@ -80,13 +81,16 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="list/[id]" options={{ title: 'Chi tiết' }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-      </Stack>
-      <StatusBar style="auto" />
-    </ThemeProvider>
+    <UserProvider>
+      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <Stack>
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="list/[id]" options={{ title: 'Chi tiết' }} />
+          <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+          <Stack.Screen name="home" />
+        </Stack>
+        <StatusBar style="auto" />
+      </ThemeProvider>
+    </UserProvider>
   );
 }

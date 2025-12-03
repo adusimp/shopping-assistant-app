@@ -19,13 +19,18 @@ import { SuggestPriceDto, UpdatePriceDto } from './dtos/price-suggestion.dto';
 @Controller('cart')
 export class CartController {
   constructor(private readonly cartService: CartService) {}
-  @Post()
-  async createCart(@Body() data: CreateCartDto) {
-    return await this.cartService.createCart(data);
+ @Post()
+  create(@Body() createCartDto: CreateCartDto) {
+    // createCartDto bây giờ đã có userId do frontend gửi lên
+    return this.cartService.createCart(createCartDto);
   }
   @Get()
-  async getAllCart() {
-    return await this.cartService.getAllCart();
+  findAll(@Query('userId') userId: number) {
+    if (!userId) {
+       // Tùy bạn xử lý: return [] hoặc throw lỗi nếu không có user
+       return []; 
+    }
+    return this.cartService.getAllCart(userId);
   }
   @Get(':id')
   async getCartById(@Param('id') id: number) {

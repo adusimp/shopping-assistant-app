@@ -8,6 +8,7 @@ import { CartModule } from './domain/carts/cart.module';
 import { ProductModule } from './domain/products/product.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
+import { UserModule } from './domain/users/user.module';
 
 @Module({
   imports: [
@@ -18,7 +19,8 @@ import { join } from 'path';
       serveRoot: '/uploads', // Tiền tố trên URL (để khớp với DB của bạn)
     }),
     CartModule,
-    ProductModule
+    ProductModule,
+    UserModule
   ],
   controllers: [AppController],
   providers: [AppService],

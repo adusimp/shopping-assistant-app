@@ -1,5 +1,6 @@
 import { CartProduct } from 'src/domain/products/entities/cart-product.entity';
-import { Entity, PrimaryGeneratedColumn, Column, OneToMany } from 'typeorm';
+import { User } from 'src/domain/users/entities/user.entity';
+import { Entity, PrimaryGeneratedColumn, Column, OneToMany, JoinColumn, ManyToOne } from 'typeorm';
 
 @Entity('carts')
 export class Cart {
@@ -28,4 +29,11 @@ export class Cart {
   // One cart -> many cart-product records
   @OneToMany(() => CartProduct, (cp) => cp.cart)
   cartProducts: CartProduct[];
+
+  @Column()
+  user_id: number; // Lưu ID người tạo
+
+  @ManyToOne(() => User, (user) => user.carts)
+  @JoinColumn({ name: 'user_id' })
+  user: User;
 }
