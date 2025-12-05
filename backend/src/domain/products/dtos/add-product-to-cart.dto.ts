@@ -6,4 +6,5 @@ export class AddProductToCartDto {
   price: number;
   quantity: number;
   category?: ProductCategory;
+  barcode?: string;
 }

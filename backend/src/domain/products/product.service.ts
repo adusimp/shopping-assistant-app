@@ -83,7 +83,7 @@ export class ProductService {
   }
   async addProductToCart(dto: AddProductToCartDto, file: Express.Multer.File) {
     return await this.dataSource.transaction(async (manager) => {
-      const { cart_id, name, price, quantity, category } = dto;
+      const { cart_id, name, price, quantity, category,barcode } = dto;
 
       let filePath = '';
 
@@ -106,6 +106,7 @@ export class ProductService {
         price,
         img_url: filePath,
         category: category || ProductCategory.OTHER,
+        barcode
       });
       await manager.save(product);
 
@@ -158,5 +159,8 @@ export class ProductService {
       console.error(error);
       throw error;
     }
+  }
+  async findByBarcode(code: string) {
+    return await this.productRepo.findOne({ where: { barcode: code } });
   }
 }

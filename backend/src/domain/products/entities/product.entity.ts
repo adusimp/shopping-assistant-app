@@ -2,7 +2,6 @@ import { ProductCategory } from 'src/common/enum/product-categories.enum';
 import { Entity, PrimaryGeneratedColumn, Column, OneToMany } from 'typeorm';
 import { CartProduct } from './cart-product.entity';
 
-
 @Entity('products')
 export class Product {
   @PrimaryGeneratedColumn()
@@ -11,10 +10,10 @@ export class Product {
   @Column()
   name: string;
 
-  @Column('decimal', { precision: 10, scale: 2,default:0 })
+  @Column('decimal', { precision: 10, scale: 2, default: 0 })
   price: number;
 
-  @Column({nullable:true})
+  @Column({ nullable: true })
   img_url: string;
 
   @Column({
@@ -27,4 +26,7 @@ export class Product {
   // One product -> many cart-product records
   @OneToMany(() => CartProduct, (cp) => cp.product)
   cartProducts: CartProduct[];
+
+  @Column({ nullable: true, unique: true }) // Barcode là duy nhất
+  barcode: string;
 }

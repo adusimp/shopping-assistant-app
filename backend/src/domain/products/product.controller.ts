@@ -18,6 +18,15 @@ import { ProductCategory } from 'src/common/enum/product-categories.enum';
 @Controller('product')
 export class ProductController {
   constructor(private readonly productService: ProductService) {}
+  @Get('barcode/:code')
+  async getByBarcode(@Param('code') code: string) {
+    const product = await this.productService.findByBarcode(code);
+    if (!product) {
+        // Trả về status đặc biệt để Frontend biết là chưa có
+        return { found: false, message: 'Chưa có dữ liệu sản phẩm này' };
+    }
+    return { found: true, product };
+  }
   // lấy sản phẩm trong giỏ hàng
   @Get('product-in-cart/:id')
   getProducts(@Param('id') id: number) {

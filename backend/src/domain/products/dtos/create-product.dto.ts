@@ -5,4 +5,5 @@ export class CreateProductDto {
   price: number;
   img_url: string;
   category: ProductCategory;
+  barcode?: string;
 }

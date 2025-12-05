@@ -21,6 +21,7 @@ import { AiSuggestModal } from '@/components/cart/aiSuggestModal';
 import { CartItemRow } from '@/components/cart/cartItem';
 import { PriceCheckModal } from '@/components/cart/priceCheckModal';
 import ProductListScreen from '@/components/productListScreen';
+import { BarcodeScannerModal } from '@/components/cart/barcodeScan';
 
 // --- IMPORT CÁC COMPONENT ĐÃ TÁCH ---
 
@@ -51,12 +52,13 @@ export default function ListDetailScreen() {
   const [cart, setCart] = useState<CartDetail | null>(null);
   const [items, setItems] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
-
+  const [newBarcode, setNewBarcode] = useState('');
+  const [scanVisible, setScanVisible] = useState(false);
   // --- State Edit Header ---
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState('');
   const [editBudget, setEditBudget] = useState('');
-  
+
   // --- STATE MỚI CHO DATE PICKER (EDIT) ---
   const [editDate, setEditDate] = useState(new Date());
   const [showEditPicker, setShowEditPicker] = useState(false);
@@ -88,7 +90,7 @@ export default function ListDetailScreen() {
       return a.is_bought ? 1 : -1;
     });
   };
-// --- HELPERS CHO WEB DATE PICKER (EDIT) ---
+  // --- HELPERS CHO WEB DATE PICKER (EDIT) ---
   const formatDateForWeb = (date: Date) => {
     const d = new Date(date);
     d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
@@ -145,7 +147,7 @@ export default function ListDetailScreen() {
   const percent = budget > 0 ? (totalPrice / budget) * 100 : 0;
   const remaining = budget - totalPrice;
   const isOverBudget = remaining < 0;
-  let progressColor = '#34C759'; 
+  let progressColor = '#34C759';
   if (percent > 100) progressColor = '#FF3B30';
   else if (percent > 80) progressColor = '#FFCC00';
 
@@ -163,12 +165,12 @@ export default function ListDetailScreen() {
       setCart(data);
       setEditName(data.name);
       setEditBudget(data.budget > 0 ? data.budget.toString() : '');
-      
+
       // Set ngày hiện tại nếu có, hoặc ngày mai nếu chưa có
       if (data.notify_at) {
-          setEditDate(new Date(data.notify_at));
+        setEditDate(new Date(data.notify_at));
       } else {
-          setEditDate(new Date());
+        setEditDate(new Date());
       }
     } catch (error) { console.error('Lỗi lấy chi tiết cart:', error); }
   };
@@ -224,7 +226,7 @@ export default function ListDetailScreen() {
         else Alert.alert("Lỗi", "Không thể xóa");
       } catch (e) { Alert.alert("Lỗi mạng"); }
     };
-    if (Platform.OS === 'web') { if (window.confirm("Xóa sản phẩm này?")) executeDelete(); } 
+    if (Platform.OS === 'web') { if (window.confirm("Xóa sản phẩm này?")) executeDelete(); }
     else { Alert.alert("Xác nhận xóa", "Bạn muốn bỏ sản phẩm này?", [{ text: "Hủy", style: "cancel" }, { text: "Xóa", style: "destructive", onPress: executeDelete }]); }
   };
 
@@ -237,7 +239,7 @@ export default function ListDetailScreen() {
         else Alert.alert("Lỗi", "Không thể dọn giỏ hàng");
       } catch (e) { Alert.alert("Lỗi mạng"); }
     };
-    if (Platform.OS === 'web') { if (window.confirm("Xóa TẤT CẢ?")) executeClear(); } 
+    if (Platform.OS === 'web') { if (window.confirm("Xóa TẤT CẢ?")) executeClear(); }
     else { Alert.alert("Xác nhận dọn giỏ hàng", "Xóa TẤT CẢ sản phẩm?", [{ text: "Hủy", style: "cancel" }, { text: "Xóa sạch", style: "destructive", onPress: executeClear }]); }
   };
 
@@ -288,17 +290,72 @@ export default function ListDetailScreen() {
 
   const handleAddItem = async (formData: any) => {
     try {
-      const textFields = { cart_id: String(cartId), name: formData.name, price: String(formData.price || 0), quantity: String(formData.quantity || 1), category: formData.category || '' };
+      // 1. Chuẩn bị dữ liệu text (Bao gồm BARCODE)
+      const textFields = {
+        cart_id: String(cartId),
+        name: formData.name,
+        price: String(formData.price || 0),
+        quantity: String(formData.quantity || 1),
+        category: formData.category || '',
+        barcode: newBarcode || '', // <--- QUAN TRỌNG: Gửi mã vạch đi (nếu có)
+      };
+
+      // --- TRƯỜNG HỢP 1: WEB ---
       if (Platform.OS === 'web') {
         const postData = new FormData();
         Object.entries(textFields).forEach(([k, v]) => postData.append(k, v as string));
-        if (formData.imageUri) { const res = await fetch(formData.imageUri); const blob = await res.blob(); postData.append('file', blob, 'upload.jpg'); }
-        await fetch(`${API_URL}/product/add-product-to-cart`, { method: 'POST', body: postData });
-      } else {
-        if (formData.imageUri) { await uploadAsync(`${API_URL}/product/add-product-to-cart`, formData.imageUri, { fieldName: 'file', httpMethod: 'POST', uploadType: FileSystemUploadType.MULTIPART, parameters: textFields }); }
+        
+        if (formData.imageUri) {
+          const res = await fetch(formData.imageUri);
+          const blob = await res.blob();
+          postData.append('file', blob, 'upload.jpg');
+        }
+        
+        const res = await fetch(`${API_URL}/product/add-product-to-cart`, { 
+            method: 'POST', 
+            body: postData 
+        });
+        
+        if (!res.ok) throw new Error(await res.text());
+      } 
+      // --- TRƯỜNG HỢP 2: MOBILE (Android/iOS) ---
+      else {
+        if (formData.imageUri) {
+          // A. Có ảnh -> Dùng uploadAsync (Tối ưu cho file)
+          const response = await uploadAsync(`${API_URL}/product/add-product-to-cart`, formData.imageUri, {
+            fieldName: 'file',
+            httpMethod: 'POST',
+            uploadType: FileSystemUploadType.MULTIPART,
+            parameters: textFields, // textFields đã chứa barcode
+          });
+          
+          if (response.status >= 300) throw new Error(response.body);
+
+        } else {
+          // B. Không có ảnh -> Dùng fetch thường với FormData
+          const postData = new FormData();
+          Object.entries(textFields).forEach(([k, v]) => postData.append(k, v as string));
+
+          const res = await fetch(`${API_URL}/product/add-product-to-cart`, {
+            method: 'POST',
+            body: postData,
+            // React Native tự động xử lý header Content-Type cho FormData
+          });
+
+          if (!res.ok) throw new Error("Lỗi server");
+        }
       }
-      Alert.alert("Thành công", "Đã thêm sản phẩm"); setModalManualVisible(false); fetchCartItems();
-    } catch (e) { Alert.alert("Lỗi", String(e)); }
+      
+      // --- XỬ LÝ THÀNH CÔNG ---
+      Alert.alert("Thành công", "Đã thêm sản phẩm");
+      setModalManualVisible(false);
+      setNewBarcode(''); // <--- Reset barcode để không dính cho lần sau thêm thủ công
+      fetchCartItems();
+
+    } catch (e) {
+      console.error(e); 
+      Alert.alert("Lỗi", "Không thể thêm sản phẩm: " + String(e)); 
+    }
   };
 
   if (loading) return <ActivityIndicator style={styles.centered} size="large" />;
@@ -315,6 +372,9 @@ export default function ListDetailScreen() {
               </TouchableOpacity>
               <TouchableOpacity onPress={() => setModalManualVisible(true)} style={{ padding: 5 }}>
                 <Ionicons name="add-circle-outline" size={28} color="#007AFF" />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setScanVisible(true)}>
+                <Ionicons name="barcode-outline" size={24} color="black" />
               </TouchableOpacity>
             </View>
           ),
@@ -342,116 +402,116 @@ export default function ListDetailScreen() {
             <TextInput style={styles.input} value={editName} onChangeText={setEditName} />
             <Text style={styles.label}>Ngân sách (VNĐ):</Text>
             <TextInput style={styles.input} value={editBudget} onChangeText={setEditBudget} keyboardType="numeric" placeholder="0" />
-            
+
             <Text style={styles.label}>Thời gian thông báo:</Text>
-            
+
             {/* --- LOGIC CHỌN NGÀY GIỜ (WEB / MOBILE) --- */}
             {Platform.OS === 'web' ? (
-                /* GIAO DIỆN WEB */
-                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 15 }}>
-                    {/* @ts-ignore */}
-                    {React.createElement('input', {
-                        type: 'date',
-                        value: formatDateForWeb(editDate),
-                        onChange: handleWebEditDateChange,
-                        style: { padding: 10, flex: 1, border: '1px solid #ccc', borderRadius: 5 }
-                    })}
-                    {/* @ts-ignore */}
-                    {React.createElement('input', {
-                        type: 'time',
-                        value: formatTimeForWeb(editDate),
-                        onChange: handleWebEditTimeChange,
-                        style: { padding: 10, flex: 1, border: '1px solid #ccc', borderRadius: 5 }
-                    })}
-                </View>
+              /* GIAO DIỆN WEB */
+              <View style={{ flexDirection: 'row', gap: 10, marginBottom: 15 }}>
+                {/* @ts-ignore */}
+                {React.createElement('input', {
+                  type: 'date',
+                  value: formatDateForWeb(editDate),
+                  onChange: handleWebEditDateChange,
+                  style: { padding: 10, flex: 1, border: '1px solid #ccc', borderRadius: 5 }
+                })}
+                {/* @ts-ignore */}
+                {React.createElement('input', {
+                  type: 'time',
+                  value: formatTimeForWeb(editDate),
+                  onChange: handleWebEditTimeChange,
+                  style: { padding: 10, flex: 1, border: '1px solid #ccc', borderRadius: 5 }
+                })}
+              </View>
             ) : (
-                /* GIAO DIỆN MOBILE */
-                <>
-                    {/* Hiển thị kết quả */}
-                    <View style={{ backgroundColor: '#f0f0f0', padding: 10, borderRadius: 8, marginBottom: 10, alignItems: 'center' }}>
-                        <Text style={{ fontWeight: 'bold', color: '#007AFF' }}>
-                            {editDate.toLocaleDateString('vi-VN')} - {editDate.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
-                        </Text>
-                    </View>
+              /* GIAO DIỆN MOBILE */
+              <>
+                {/* Hiển thị kết quả */}
+                <View style={{ backgroundColor: '#f0f0f0', padding: 10, borderRadius: 8, marginBottom: 10, alignItems: 'center' }}>
+                  <Text style={{ fontWeight: 'bold', color: '#007AFF' }}>
+                    {editDate.toLocaleDateString('vi-VN')} - {editDate.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
+                  </Text>
+                </View>
 
-                    {/* Nút bấm */}
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 }}>
-                        <TouchableOpacity
-                            style={[styles.btn, { backgroundColor: 'white', borderWidth: 1, borderColor: '#ccc', marginRight: 5 }]}
-                            onPress={() => showEditMode('date')}
-                        >
-                            <Text style={{ color: '#333' }}>📅 Đổi Ngày</Text>
-                        </TouchableOpacity>
+                {/* Nút bấm */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 }}>
+                  <TouchableOpacity
+                    style={[styles.btn, { backgroundColor: 'white', borderWidth: 1, borderColor: '#ccc', marginRight: 5 }]}
+                    onPress={() => showEditMode('date')}
+                  >
+                    <Text style={{ color: '#333' }}>📅 Đổi Ngày</Text>
+                  </TouchableOpacity>
 
-                        <TouchableOpacity
-                            style={[styles.btn, { backgroundColor: 'white', borderWidth: 1, borderColor: '#ccc', marginLeft: 5 }]}
-                            onPress={() => showEditMode('time')}
-                        >
-                            <Text style={{ color: '#333' }}>⏰ Đổi Giờ</Text>
-                        </TouchableOpacity>
-                    </View>
+                  <TouchableOpacity
+                    style={[styles.btn, { backgroundColor: 'white', borderWidth: 1, borderColor: '#ccc', marginLeft: 5 }]}
+                    onPress={() => showEditMode('time')}
+                  >
+                    <Text style={{ color: '#333' }}>⏰ Đổi Giờ</Text>
+                  </TouchableOpacity>
+                </View>
 
-                    {/* Picker ẩn (Hiện ra khi bấm nút) */}
-                    {showEditPicker && (
-                        <DateTimePicker
-                            value={editDate}
-                            mode={editPickerMode}
-                            is24Hour={true}
-                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                            onChange={onChangeEditDate}
-                        />
-                    )}
-                    
-                    {/* Nút Xong cho iOS */}
-                    {Platform.OS === 'ios' && showEditPicker && (
-                        <TouchableOpacity 
-                            style={{alignItems:'flex-end', marginBottom: 10}}
-                            onPress={() => setShowEditPicker(false)}
-                        >
-                            <Text style={{color: '#007AFF', fontWeight:'bold'}}>Xong</Text>
-                        </TouchableOpacity>
-                    )}
-                </>
+                {/* Picker ẩn (Hiện ra khi bấm nút) */}
+                {showEditPicker && (
+                  <DateTimePicker
+                    value={editDate}
+                    mode={editPickerMode}
+                    is24Hour={true}
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={onChangeEditDate}
+                  />
+                )}
+
+                {/* Nút Xong cho iOS */}
+                {Platform.OS === 'ios' && showEditPicker && (
+                  <TouchableOpacity
+                    style={{ alignItems: 'flex-end', marginBottom: 10 }}
+                    onPress={() => setShowEditPicker(false)}
+                  >
+                    <Text style={{ color: '#007AFF', fontWeight: 'bold' }}>Xong</Text>
+                  </TouchableOpacity>
+                )}
+              </>
             )}
             {/* ----------------------------------------- */}
 
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 10 }}>
-                <TouchableOpacity onPress={() => setIsEditing(false)}><Text style={styles.cancelText}>Hủy</Text></TouchableOpacity>
-                <TouchableOpacity onPress={handleUpdateCart}><Text style={[styles.editBtn, { color: '#34C759' }]}>Lưu lại</Text></TouchableOpacity>
+              <TouchableOpacity onPress={() => setIsEditing(false)}><Text style={styles.cancelText}>Hủy</Text></TouchableOpacity>
+              <TouchableOpacity onPress={handleUpdateCart}><Text style={[styles.editBtn, { color: '#34C759' }]}>Lưu lại</Text></TouchableOpacity>
             </View>
           </View>
         ) : (
           <View>
-            <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
-                <Text style={styles.infoText}>📦 {cart?.name}</Text>
-                <Text style={styles.infoText}>⏰ {cart?.notify_at ? new Date(cart.notify_at).toLocaleDateString('vi-VN') : '---'}</Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={styles.infoText}>📦 {cart?.name}</Text>
+              <Text style={styles.infoText}>⏰ {cart?.notify_at ? new Date(cart.notify_at).toLocaleDateString('vi-VN') : '---'}</Text>
             </View>
 
             {/* THANH NGÂN SÁCH */}
             {budget > 0 ? (
-                <View style={styles.budgetContainer}>
-                    <View style={{flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6}}>
-                        <Text style={{color: '#666', fontSize: 13}}>
-                            Đã dùng: <Text style={{fontWeight: 'bold', color: '#333'}}>{formatCurrency(totalPrice)}</Text>
-                        </Text>
-                        <Text style={{color: '#666', fontSize: 13}}>
-                            Ngân sách: {formatCurrency(budget)}
-                        </Text>
-                    </View>
-                    <View style={styles.progressBarBackground}>
-                        <View style={[styles.progressBarFill, { width: `${Math.min(percent, 100)}%`, backgroundColor: progressColor }]} />
-                    </View>
-                    <View style={{flexDirection: 'row', justifyContent: 'space-between', marginTop: 4}}>
-                        <Text style={{fontSize: 12, fontWeight: '600', color: progressColor}}>{Math.round(percent)}%</Text>
-                        <Text style={{fontSize: 12, fontWeight: '600', color: isOverBudget ? '#FF3B30' : '#34C759'}}>
-                            {isOverBudget ? `Vượt quá: ${formatCurrency(Math.abs(remaining))}` : `Còn dư: ${formatCurrency(remaining)}`}
-                        </Text>
-                    </View>
+              <View style={styles.budgetContainer}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ color: '#666', fontSize: 13 }}>
+                    Đã dùng: <Text style={{ fontWeight: 'bold', color: '#333' }}>{formatCurrency(totalPrice)}</Text>
+                  </Text>
+                  <Text style={{ color: '#666', fontSize: 13 }}>
+                    Ngân sách: {formatCurrency(budget)}
+                  </Text>
                 </View>
+                <View style={styles.progressBarBackground}>
+                  <View style={[styles.progressBarFill, { width: `${Math.min(percent, 100)}%`, backgroundColor: progressColor }]} />
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: progressColor }}>{Math.round(percent)}%</Text>
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: isOverBudget ? '#FF3B30' : '#34C759' }}>
+                    {isOverBudget ? `Vượt quá: ${formatCurrency(Math.abs(remaining))}` : `Còn dư: ${formatCurrency(remaining)}`}
+                  </Text>
+                </View>
+              </View>
             ) : (
-                <TouchableOpacity onPress={() => setIsEditing(true)} style={{marginTop: 5}}>
-                    <Text style={{color: '#007AFF', fontSize: 13, fontStyle: 'italic'}}>+ Thiết lập ngân sách ngay</Text>
-                </TouchableOpacity>
+              <TouchableOpacity onPress={() => setIsEditing(true)} style={{ marginTop: 5 }}>
+                <Text style={{ color: '#007AFF', fontSize: 13, fontStyle: 'italic' }}>+ Thiết lập ngân sách ngay</Text>
+              </TouchableOpacity>
             )}
           </View>
         )}
@@ -504,7 +564,32 @@ export default function ListDetailScreen() {
           <ProductListScreen cartId={Number(cartId)} onItemAdded={() => fetchCartItems()} />
         </View>
       </Modal>
-
+       <BarcodeScannerModal 
+         visible={scanVisible}
+         onClose={() => setScanVisible(false)}
+         onFound={(product) => {
+             // Nếu tìm thấy: Thêm ngay vào giỏ (tái sử dụng API add-ai-items cho nhanh)
+             handleConfirmSuggestions([{
+                type: 'EXISTING',
+                id: product.id,
+                name: product.name,
+                price: product.price,
+                img_url: product.img_url
+             }]);
+             setScanVisible(false);
+         }}
+         onNotFound={(barcode) => {
+             // Nếu không thấy: Lưu mã vạch lại -> Mở form nhập tay
+             setNewBarcode(barcode); 
+             setScanVisible(false);
+             
+             // Chờ 1 chút cho Modal camera đóng hẳn rồi mới mở Modal nhập
+             setTimeout(() => {
+                 Alert.alert("Món mới", `Chưa có dữ liệu cho mã: ${barcode}. Vui lòng nhập thông tin.`);
+                 setModalManualVisible(true);
+             }, 500);
+         }}
+      />
       <ManualAddModal visible={modalManualVisible} onClose={() => setModalManualVisible(false)} onAdd={handleAddItem} />
       <AiSuggestModal visible={modalSuggestVisible} onClose={() => setModalSuggestVisible(false)} cartName={cart?.name} suggestions={suggestedItems} onAddItems={handleConfirmSuggestions} />
       <PriceCheckModal visible={priceModalVisible} onClose={() => setPriceModalVisible(false)} onConfirm={handleConfirmUpdatePrice} targetItem={targetItem} aiPrice={aiPrice} loading={loadingAiPrice} />
